@@ -50,9 +50,10 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
 /* top bar */
 .top { grid-area: top; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
-.batch { display: flex; flex-direction: column; min-width: 0; }
+.batch { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; min-height: 52px; padding: 4px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); text-align: left; }
 .batch b { font-family: var(--display); font-size: 26px; letter-spacing: .02em; font-weight: 600; }
 .batch span { color: var(--muted); font-size: 13px; }
+.batch em { font-style: normal; color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
 .spacer { flex: 1; }
@@ -120,8 +121,13 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .log time { font-family: var(--mono); color: var(--fg); min-width: 44px; }
 
 /* fan / drum controls */
-.controls { grid-area: controls; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 640px) { .controls { grid-template-columns: 1fr; } }
+.controls { grid-area: controls; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.ctl.heat h2 { color: var(--limit); }
+.ctl .lock { margin-left: auto; min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent; font-size: 13px; font-weight: 600; }
+.ctl .lock[aria-pressed="true"] { border-color: var(--limit); color: var(--limit); }
+.ctl.heat.locked .dial button, .ctl.heat.locked .presets button { opacity: .35; }
+.ctl.heat .presets button[aria-pressed="true"] { background: var(--limit); border-color: var(--limit); color: #fff; }
+.ctl .note { margin: 0; }
 .ctl { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; min-width: 0; }
 .ctl header { display: flex; align-items: baseline; gap: 10px; }
 .ctl h2 { margin: 0; font-family: var(--display); font-size: 22px; letter-spacing: .1em; }
@@ -156,13 +162,27 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .sheet .actions button { min-height: 52px; padding: 0 18px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); font-weight: 600; }
 .sheet .actions button.primary { background: var(--accent); border-color: var(--accent); color: #1a1208; }
 .note { color: var(--muted); font-size: 12px; }
+.sheet > div.setup { width: min(760px, 100%); max-height: calc(100% - 32px); overflow: auto; }
+.stepper { display: grid; grid-template-columns: 56px 1fr 56px; gap: 8px; }
+.stepper button { min-height: 52px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); font-family: var(--display); font-size: 20px; font-weight: 600; }
+.stepper input { text-align: center; font-family: var(--display); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line); background: transparent; font-family: var(--display); font-size: 18px; font-weight: 600; }
+.chips button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1a1208; }
+.bglist { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.bgitem { display: grid; gap: 4px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--raised); text-align: left; min-height: 64px; }
+.bgitem[aria-pressed="true"] { border: 2px solid var(--accent); padding: 7px 9px; }
+.bgitem b { font-family: var(--display); font-size: 18px; font-weight: 600; }
+.bgitem span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bgitem canvas { width: 100%; height: 44px; }
+.bgitem .tag { color: var(--accent); font-weight: 600; }
+.sheet h3 { margin: 4px 0 0; font-family: var(--display); font-size: 16px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 </style>
 
 <div class="console">
   <header class="top">
-    <div class="batch"><b>#161 India Natural</b><span>1400 g in · background: #158 (previous India Natural)</span></div>
+    <button class="batch" id="editRoast" aria-label="Edit roast setup"><b id="roastTitle">#161 India Natural</b><span id="roastSub">1400 g in · background #158</span><em>EDIT ROAST</em></button>
     <span class="chip" title="Simulated connection status"><span class="dot"></span>Roaster linked · 2.0 s · 0 dropouts</span>
-    <span class="chip" title="Setpoint of the ET controller: the burner is held back when ET reaches it">ET heat limit 200 °C · locked</span>
     <span class="spacer"></span>
     <div class="sim" aria-label="Simulation">
       <span>Simulated roast</span>
@@ -192,9 +212,9 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       <small>Phases</small>
       <div class="phasebar"><span class="p1" id="pb1"></span><span class="p2" id="pb2"></span><span class="p3" id="pb3"></span></div>
       <div class="phaserows">
-        <div class="phase" id="ph1" style="--c: var(--ph1)"><em>Drying</em><b><span id="pt1">--</span> <span class="pct" id="pp1"></span></b><span class="target">median 5:29 · 48 %</span></div>
-        <div class="phase" id="ph2" style="--c: var(--ph2)"><em>Maillard</em><b><span id="pt2">--</span> <span class="pct" id="pp2"></span></b><span class="target">median 3:31 · 31 %</span></div>
-        <div class="phase" id="ph3" style="--c: var(--ph3)"><em>Development</em><b><span id="pt3">--</span> <span class="pct" id="pp3"></span></b><span class="target">median 2:00 · 18 %</span></div>
+        <div class="phase" id="ph1" style="--c: var(--ph1)"><em>Drying</em><b><span id="pt1">--</span> <span class="pct" id="pp1"></span></b><span class="target" id="tg1"></span></div>
+        <div class="phase" id="ph2" style="--c: var(--ph2)"><em>Maillard</em><b><span id="pt2">--</span> <span class="pct" id="pp2"></span></b><span class="target" id="tg2"></span></div>
+        <div class="phase" id="ph3" style="--c: var(--ph3)"><em>Development</em><b><span id="pt3">--</span> <span class="pct" id="pp3"></span></b><span class="target" id="tg3"></span></div>
       </div>
     </div>
 
@@ -222,7 +242,29 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       <div class="presets"></div>
       <div class="run"><button class="on" data-run="1">Run</button><button class="off" data-run="0">Stop</button></div>
     </div>
+    <div class="ctl heat locked" id="ctlHeat">
+      <header><h2>ET HEAT LIMIT</h2><button class="lock" id="heatLock" aria-pressed="false">Unlock</button></header>
+      <div class="dial"><button data-hstep="-5" aria-label="Heat limit down 5">−5</button><output id="heatOut"></output><button data-hstep="5" aria-label="Heat limit up 5">+5</button></div>
+      <div class="presets" id="heatPresets"></div>
+      <p class="note" id="heatNote">Burner is held back when ET reaches this. Unlock to change; locks again after 15 s.</p>
+    </div>
   </section>
+</div>
+
+<div class="sheet" id="setup" hidden>
+  <div class="setup" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+    <h2 id="setupTitle">Roast #161 setup</h2>
+    <div class="row">
+      <label for="setupName">Roast name<input id="setupName" autocomplete="off"></label>
+      <label for="setupBean">Bean<select id="setupBean"><option>India Natural</option><option>El Salvador</option><option>Ethiopia Sweet Lily</option><option>Burundi</option><option>Dominican</option></select></label>
+    </div>
+    <h3>Grams in</h3>
+    <div class="stepper"><button data-wstep="-50" aria-label="50 g less">−50</button><input id="setupWeight" inputmode="numeric" aria-label="Green weight in grams"><button data-wstep="50" aria-label="50 g more">+50</button></div>
+    <div class="chips" id="weightChips"></div>
+    <h3>Background roast</h3>
+    <div class="bglist" id="bgList"></div>
+    <div class="actions"><button id="setupCancel">Cancel</button><button class="primary" id="setupApply">Apply</button></div>
+  </div>
 </div>
 
 <div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastUndo">Undo</button></div>
@@ -247,8 +289,37 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   // ---- simulated FZ94: the median of 154 logged roasts (TP 68 s at 81 °C, DRY 5:29 at 149 °C, FCs 9:00 at 188 °C)
   const BT_K = [[0,200],[30,110],[68,81],[150,105],[329,149],[450,172],[540,188],[680,204],[800,214]];
   const ET_K = [[0,190],[30,165],[68,160],[150,165],[329,168],[540,172],[680,175],[800,177]];
-  const BG_SHIFT = 12; // background roast #158 ran a little later
-  const HEAT_LIMIT = 200;
+  // the roast being set up (Edit roast) and the ET heat limit (its own control)
+  const SETUP = { number: 161, name: 'India Natural', bean: 'India Natural', weightIn: 1400, bg: '158', heatLimit: 200 };
+  const HEAT = { min: 150, max: 250, presets: [180, 190, 200, 210, 220] };
+
+  // previous roasts to lay behind this one, from the logged profiles:
+  // [time s, BT °C, ET °C] at charge, turning point, DRY END, first crack and DROP
+  const BACKGROUNDS = [
+    { id: '158', name: 'India Natural', date: '2026-10-10', win: 1800, wout: 1556, charge: [0, 204, 189], tp: [78, 77, 154], dry: [482, 154, 162], fcs: null, drop: [902, 197, 172] },
+    { id: '157', name: 'India Natural', date: '2026-09-24', win: 1400, wout: 1200, charge: [0, 235, 204], tp: [74, 83, 167], dry: [432, 157, 160], fcs: [946, 196, 157], drop: [990, 197, 159] },
+    { id: '156', name: 'India Natural', date: '2026-09-09', win: 1400, wout: 1196, charge: [0, 225, 200], tp: [78, 83, 183], dry: [420, 167, 164], fcs: [874, 196, 166], drop: [928, 206, 173] },
+    { id: '155', name: 'India Natural', date: '2026-08-23', win: 1400, wout: 1152, charge: [0, 222, 198], tp: [64, 87, 161], dry: [418, 173, 152], fcs: [656, 208, 184], drop: [760, 216, 185] },
+    { id: 'median', name: 'Typical roast', date: 'median of 154', median: true },
+    { id: 'none', name: 'No background', none: true },
+  ];
+  const bgCache = {};
+  function bgProfile(id) {
+    if (bgCache[id]) return bgCache[id];
+    const b = BACKGROUNDS.find(x => x.id === id) || BACKGROUNDS[0];
+    let p;
+    if (b.none) p = { b, bt: null, et: null };
+    else if (b.median) p = { b, bt: btCurve, et: etCurve, dry: 329, fcs: 540, drop: 680 };
+    else {
+      const pts = [b.charge, b.tp, b.dry, b.fcs, b.drop].filter(Boolean);
+      const drop = [b.tp[0] * 0.4, b.charge[1] - (b.charge[1] - b.tp[1]) * 0.72]; // the fall after charge
+      p = { b, bt: pchip([[0, b.charge[1]], drop, ...pts.slice(1).map(x => [x[0], x[1]])]),
+        et: pchip(pts.map(x => [x[0], x[2]])), dry: b.dry[0], fcs: b.fcs ? b.fcs[0] : null, drop: b.drop[0] };
+    }
+    bgCache[id] = p;
+    return p;
+  }
+  const bgLabel = b => b.none ? 'no background' : b.median ? 'typical roast' : `#${b.id}`;
 
   // monotone cubic interpolation (Fritsch–Carlson), so the curves and their rate of rise are smooth
   function pchip(knots) {
@@ -280,8 +351,8 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     { key: 'ror', label: 'BT rate of rise', color: '--ror', on: true },
     { key: 'etror', label: 'ET rate of rise', color: '--etror', on: false },
     { key: 'limit', label: 'ET heat limit', color: '--limit', on: true, dash: true },
-    { key: 'bgbt', label: '#158 BT', color: '--bg-curve', on: true, dash: true },
-    { key: 'bget', label: '#158 ET', color: '--bg-curve', on: false, dash: true },
+    { key: 'bgbt', label: 'Background BT', color: '--bg-curve', on: true, dash: true },
+    { key: 'bget', label: 'Background ET', color: '--bg-curve', on: false, dash: true },
     { key: 'drives', label: 'Fan & drum', color: '--fan', on: true },
   ];
   const shown = Object.fromEntries(CURVES.map(c => [c.key, c.on]));
@@ -321,7 +392,9 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     if (t < 0) { bt = 200; et = 190; }
     else if (!S.dropped) {
       const air = Math.max(0, S.fan.actual - 30);
-      bt = btCurve(t) - air * 0.025; et = Math.min(HEAT_LIMIT, etCurve(t) - air * 0.08);
+      // the ET controller holds ET at the heat limit by cutting back the burner, which also slows the beans
+      const etFree = etCurve(t) - air * 0.08, excess = Math.max(0, etFree - SETUP.heatLimit);
+      et = etFree - excess; bt = btCurve(t) - air * 0.025 - excess * 0.6;
     } else {
       const since = t - S.marks.DROP;
       bt = Math.max(60, btCurve(S.marks.DROP) - since * 2.5); et = 175 + Math.min(10, since / 6);
@@ -427,6 +500,9 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   function openSheet() {
     const s = cur(), fc = S.marks.FCs;
     const dev = fc !== undefined ? S.marks.DROP - fc : null;
+    setText('sheetTitle', `Roast #${SETUP.number} ${SETUP.name} dropped`);
+    document.getElementById('win').value = SETUP.weightIn;
+    document.getElementById('bean').value = SETUP.bean;
     document.getElementById('sheetSummary').textContent =
       `Dropped at ${fmt(S.marks.DROP)}, BT ${s.bt.toFixed(1)} °C` + (dev !== null ? ` · development ${fmt(dev)} (${(100 * dev / S.marks.DROP).toFixed(1)} %)` : ' · first crack was not marked');
     document.getElementById('sheet').hidden = false;
@@ -466,12 +542,20 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     setText('et', s.et.toFixed(0));
     setText('exh', s.exh.toFixed(0));
     setText('ror', s.ror === null ? '--' : s.ror.toFixed(1));
-    const atLimit = s.et >= HEAT_LIMIT - 1;
-    setText('etSub', atLimit ? `at the ${HEAT_LIMIT} limit · burner held back` : `limit ${HEAT_LIMIT} · rise ${s.etror === null ? '--' : s.etror.toFixed(1)} °/min`);
+    const lim = SETUP.heatLimit;
+    const atLimit = s.et >= lim - 1;
+    setText('etSub', atLimit ? `at the ${lim} limit · burner held back` : `limit ${lim} · rise ${s.etror === null ? '--' : s.etror.toFixed(1)} °/min`);
     document.getElementById('etTile').classList.toggle('limit', atLimit);
     setText('clock', S.t < 0 ? 'preheat' : fmt(S.dropped ? S.marks.DROP : S.t));
-    const bgBt = btCurve(Math.max(0, S.t - BG_SHIFT));
-    setText('vsBg', S.t > 0 && !S.dropped ? `BT ${(s.bt - bgBt >= 0 ? '+' : '')}${(s.bt - bgBt).toFixed(1)} vs #158` : '');
+    const bg = bgProfile(SETUP.bg);
+    const bgBt = bg.bt && S.t > 0 && S.t <= bg.drop ? bg.bt(S.t) : null;
+    setText('vsBg', bgBt !== null && !S.dropped ? `BT ${(s.bt - bgBt >= 0 ? '+' : '')}${(s.bt - bgBt).toFixed(1)} vs ${bgLabel(bg.b)}` : '');
+    // phase targets from the background roast
+    const targets = bg.bt ? [bg.dry, bg.fcs ? bg.fcs - bg.dry : null, bg.fcs ? bg.drop - bg.fcs : null] : [null, null, null];
+    for (let i = 0; i < 3; i++) {
+      setText(`tg${i+1}`, targets[i] === null ? (bg.bt ? `${bgLabel(bg.b)}: not marked` : 'no background') : `${bgLabel(bg.b)} ${fmt(targets[i])} · ${Math.round(100 * targets[i] / bg.drop)} %`);
+    }
+    renderHeat();
 
     const ph = phaseTimes();
     setText('phaseNow', S.dropped ? 'Cooling' : S.t < 0 ? 'Preheat' : ['', 'Drying', 'Maillard', 'Development'][ph.now]);
@@ -557,17 +641,24 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     }
     g.textAlign = 'left'; g.textBaseline = 'bottom'; g.fillText('°C', 6, pad.t - 6); g.textAlign = 'right'; g.fillText('°/min', W - 6, pad.t - 6);
 
+    // background roast, drawn to its DROP, with its marks as small ticks
+    const bg = bgProfile(SETUP.bg);
     const dashed = (fn, color, width) => {
       g.setLineDash([6, 5]); g.strokeStyle = color; g.lineWidth = width; g.beginPath();
-      for (let t = 0; t <= 690; t += 4) { const x = X(t + BG_SHIFT), y = Y(fn(t)); t ? g.lineTo(x, y) : g.moveTo(x, y); }
+      for (let t = 0; t <= bg.drop; t += 4) { const x = X(t), y = Y(fn(t)); t ? g.lineTo(x, y) : g.moveTo(x, y); }
       g.stroke(); g.setLineDash([]);
     };
-    if (shown.bgbt) dashed(btCurve, css('--bg-curve'), 2);
-    if (shown.bget) dashed(etCurve, css('--bg-curve'), 1.5);
+    if (bg.bt && shown.bgbt) {
+      dashed(bg.bt, css('--bg-curve'), 2);
+      g.fillStyle = css('--bg-curve');
+      for (const at of [bg.dry, bg.fcs, bg.drop]) if (at) { g.beginPath(); g.arc(X(at), Y(bg.bt(at)), 4, 0, Math.PI * 2); g.fill(); }
+    }
+    if (bg.et && shown.bget) dashed(bg.et, css('--bg-curve'), 1.5);
     if (shown.limit) {
+      const lim = SETUP.heatLimit;
       g.setLineDash([2, 4]); g.strokeStyle = css('--limit'); g.lineWidth = 1.5;
-      g.beginPath(); g.moveTo(pad.l, Y(HEAT_LIMIT)); g.lineTo(W - pad.r, Y(HEAT_LIMIT)); g.stroke(); g.setLineDash([]);
-      g.fillStyle = css('--limit'); g.textAlign = 'right'; g.textBaseline = 'bottom'; g.fillText(`ET heat limit ${HEAT_LIMIT}`, W - pad.r - 4, Y(HEAT_LIMIT) - 2);
+      g.beginPath(); g.moveTo(pad.l, Y(lim)); g.lineTo(W - pad.r, Y(lim)); g.stroke(); g.setLineDash([]);
+      g.fillStyle = css('--limit'); g.textAlign = 'right'; g.textBaseline = 'bottom'; g.fillText(`ET heat limit ${lim}`, W - pad.r - 4, Y(lim) - 2);
     }
 
     const line = (key, color, width, scale) => {
@@ -610,6 +701,117 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     }
   }
 
+  // ---- ET heat limit: written to the ET controller (its memory wears with every write), so it is locked by default,
+  // unlocks with a tap and locks itself again 15 s after the last change; -/+ taps are combined into one write
+  const heat = { pending: null, timer: null, unlocked: false, lockTimer: null };
+  function heatUnlock(on) {
+    heat.unlocked = on;
+    clearTimeout(heat.lockTimer);
+    if (on) heat.lockTimer = setTimeout(() => heatUnlock(false), 15000);
+    renderHeat();
+  }
+  function heatChange(v) {
+    if (!heat.unlocked) { const n = document.getElementById('heatNote'); n.textContent = 'Locked: tap Unlock first.'; setTimeout(renderHeat, 2000); return; }
+    heat.pending = Math.max(HEAT.min, Math.min(HEAT.max, Math.round(v / 5) * 5));
+    clearTimeout(heat.timer);
+    heat.timer = setTimeout(heatCommit, COMMIT_MS);
+    heatUnlock(true); // restart the auto-lock countdown
+  }
+  function heatCommit() {
+    if (heat.pending === null) return;
+    const v = heat.pending; heat.pending = null;
+    if (v !== SETUP.heatLimit) { SETUP.heatLimit = v; addLog(S.t, `ET heat limit ${v} °C`); }
+    render();
+  }
+  function renderHeat() {
+    const shownV = heat.pending ?? SETUP.heatLimit;
+    const out = document.getElementById('heatOut');
+    out.innerHTML = `${shownV}<span class="unit"> °C</span>`;
+    out.classList.toggle('pending', heat.pending !== null);
+    document.getElementById('ctlHeat').classList.toggle('locked', !heat.unlocked);
+    const lock = document.getElementById('heatLock');
+    lock.textContent = heat.unlocked ? 'Lock' : 'Unlock'; lock.setAttribute('aria-pressed', String(heat.unlocked));
+    document.querySelectorAll('#heatPresets button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.value) === shownV)));
+    document.getElementById('heatNote').textContent = heat.unlocked ? 'Unlocked: locks again 15 s after the last change.' : 'Burner is held back when ET reaches this. Unlock to change.';
+  }
+
+  // ---- roast setup: name, bean, grams in, background roast
+  const WEIGHT_PRESETS = [1200, 1400, 1800, 2000];
+  let draft = null;
+  function renderHeader() {
+    setText('roastTitle', `#${SETUP.number} ${SETUP.name}`);
+    setText('roastSub', `${SETUP.weightIn} g in · ${SETUP.bean !== SETUP.name ? SETUP.bean + ' · ' : ''}background ${bgLabel(bgProfile(SETUP.bg).b)}`);
+  }
+  function openSetup() {
+    draft = { ...SETUP };
+    document.getElementById('setupName').value = draft.name;
+    document.getElementById('setupBean').value = draft.bean;
+    renderSetup();
+    document.getElementById('setup').hidden = false;
+  }
+  function renderSetup() {
+    document.getElementById('setupWeight').value = draft.weightIn;
+    document.querySelectorAll('#weightChips button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.value) === draft.weightIn)));
+    document.querySelectorAll('#bgList .bgitem').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === draft.bg)));
+  }
+  function buildSetup() {
+    const chips = document.getElementById('weightChips');
+    for (const w of WEIGHT_PRESETS) {
+      const b = document.createElement('button'); b.textContent = `${w} g`; b.dataset.value = w;
+      b.addEventListener('click', () => { draft.weightIn = w; renderSetup(); });
+      chips.appendChild(b);
+    }
+    document.querySelectorAll('[data-wstep]').forEach(b => b.addEventListener('click', () => {
+      draft.weightIn = Math.max(100, Math.min(3000, draft.weightIn + Number(b.dataset.wstep))); renderSetup();
+    }));
+    document.getElementById('setupWeight').addEventListener('change', e => {
+      const v = Math.round(Number(e.target.value));
+      if (v >= 100 && v <= 3000) draft.weightIn = v;
+      renderSetup();
+    });
+    document.getElementById('setupBean').addEventListener('change', e => {
+      const nameEl = document.getElementById('setupName');
+      if (nameEl.value === draft.bean) nameEl.value = e.target.value; // the name followed the bean, keep it following
+      draft.bean = e.target.value;
+      const sameBean = BACKGROUNDS.find(b => b.name === draft.bean); // newest roast of the same bean, as you usually choose
+      draft.bg = sameBean ? sameBean.id : 'median';
+      renderSetup();
+    });
+    const list = document.getElementById('bgList');
+    for (const b of BACKGROUNDS) {
+      const p = bgProfile(b.id);
+      const item = document.createElement('button');
+      item.className = 'bgitem'; item.dataset.id = b.id;
+      const facts = b.none ? 'roast without a reference' : b.median ? `DROP ${fmt(p.drop)} · FC ${fmt(p.fcs)}` :
+        `${b.win} → ${b.wout} g · DROP ${fmt(p.drop)}` + (p.fcs ? ` · dev ${fmt(p.drop - p.fcs)}` : ' · FC not marked');
+      item.innerHTML = `<b>${b.none || b.median ? b.name : '#' + b.id + ' ' + b.name}</b><span>${b.date ?? ''}</span>` +
+        (p.bt ? '<canvas></canvas>' : '') + `<span>${facts}</span>`;
+      item.addEventListener('click', () => { draft.bg = b.id; renderSetup(); });
+      list.appendChild(item);
+    }
+  }
+  function drawBgPreviews() {
+    document.querySelectorAll('#bgList .bgitem').forEach(item => {
+      const c = item.querySelector('canvas'); if (!c) return;
+      const p = bgProfile(item.dataset.id), r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+      const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const X = t => t / 1000 * r.width, Y = v => r.height - (v - 60) / (240 - 60) * r.height;
+      g.strokeStyle = css('--et'); g.lineWidth = 1.2; g.beginPath();
+      for (let t = 0; t <= p.drop; t += 10) { t ? g.lineTo(X(t), Y(p.et(t))) : g.moveTo(X(t), Y(p.et(t))); } g.stroke();
+      g.strokeStyle = css('--bt'); g.lineWidth = 2; g.beginPath();
+      for (let t = 0; t <= p.drop; t += 10) { t ? g.lineTo(X(t), Y(p.bt(t))) : g.moveTo(X(t), Y(p.bt(t))); } g.stroke();
+    });
+  }
+  function applySetup() {
+    draft.name = document.getElementById('setupName').value.trim() || draft.bean;
+    const changed = ['name', 'bean', 'weightIn', 'bg'].filter(k => draft[k] !== SETUP[k]);
+    Object.assign(SETUP, { name: draft.name, bean: draft.bean, weightIn: draft.weightIn, bg: draft.bg });
+    if (changed.length) addLog(Math.max(0, S.t), `Setup: ${SETUP.name}, ${SETUP.weightIn} g, background ${bgLabel(bgProfile(SETUP.bg).b)}`);
+    document.getElementById('setup').hidden = true;
+    renderHeader(); render();
+  }
+
   // ---- loop: the roast advances on a timer (keeps running when the tab is in the background, where animation
   // frames pause); the screen is redrawn on animation frames whenever something changed
   let last = performance.now(), dirty = true;
@@ -628,7 +830,17 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   }
 
   // ---- wiring
-  buildControl(FAN); buildControl(DRUM); buildCurveToggles();
+  buildControl(FAN); buildControl(DRUM); buildCurveToggles(); buildSetup();
+  for (const v of HEAT.presets) {
+    const b = document.createElement('button'); b.textContent = v; b.dataset.value = v;
+    b.addEventListener('click', () => heatChange(v));
+    document.getElementById('heatPresets').appendChild(b);
+  }
+  document.querySelectorAll('[data-hstep]').forEach(b => b.addEventListener('click', () => heatChange((heat.pending ?? SETUP.heatLimit) + Number(b.dataset.hstep))));
+  document.getElementById('heatLock').addEventListener('click', () => { if (heat.unlocked) heatCommit(); heatUnlock(!heat.unlocked); });
+  document.getElementById('editRoast').addEventListener('click', () => { openSetup(); requestAnimationFrame(drawBgPreviews); });
+  document.getElementById('setupCancel').addEventListener('click', () => { document.getElementById('setup').hidden = true; });
+  document.getElementById('setupApply').addEventListener('click', applySetup);
   document.getElementById('mDRY').addEventListener('click', () => mark('DRY'));
   document.getElementById('mFCs').addEventListener('click', () => mark('FCs'));
   document.getElementById('mDROP').addEventListener('click', () => mark('DROP'));
@@ -649,6 +861,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', draw);
 
   reset(5 * 60 + 10); // open mid-roast, just before DRY END
+  renderHeader();
   render();
   requestAnimationFrame(frame);
 })();
