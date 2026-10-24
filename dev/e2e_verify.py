@@ -180,11 +180,23 @@ def main() -> None:
     rx = [r for r in trace if r.get('dir') == 'rx']
     partial = [r for r in trace if r.get('partial')]
     rep.check('MODBUS trace', 'all frames decoded', not partial, f'{len(tx)} sent, {len(rx)} received, {len(partial)} undecoded')
+    # injected faults (simulator): dropped requests to a slave, rejected writes
+    faults = next((r.get('faults') or '' for r in driver if r['action'] == 'app_ready'), '')
+    dropped_slaves = {int(f.split('=', 1)[1].split(':')[0]) for f in faults.split(';') if f.startswith('drop=')}
+    rejected = {tuple(int(x) for x in f.split('=', 1)[1].split(':')) for f in faults.split(';') if f.startswith('reject=')}
+    stats['faults'] = faults
     exceptions = [r for r in rx if 'exception' in r]
-    rep.check('MODBUS trace', 'no exception responses', not exceptions, f'{len(exceptions)} exceptions')
-    answered = {r.get('tid') for r in rx}
-    unanswered = [r for r in tx if r.get('tid') not in answered]
-    rep.check('MODBUS trace', 'every request answered', not unanswered, f'{len(unanswered)} unanswered')
+    unexpected_exc = [r for r in exceptions if not any(r['slave'] == s and r['fc'] == 6 for s, _, _ in rejected)]
+    rep.check('MODBUS trace', 'no unexpected exception responses', not unexpected_exc, f'{len(exceptions)} exceptions, {len(unexpected_exc)} unexpected')
+    # a request is answered if the next frame on the wire, before the next request, is a reply from the same slave
+    # (works for RTU, which has no transaction id, and for TCP)
+    frames = [r for r in trace if r.get('dir') in {'tx', 'rx'} and not r.get('noise')]
+    unanswered = [f for i, f in enumerate(frames) if f['dir'] == 'tx' and not (i + 1 < len(frames) and frames[i+1]['dir'] == 'rx' and frames[i+1].get('slave') == f.get('slave'))]
+    unexpected_miss = [f for f in unanswered if f.get('slave') not in dropped_slaves]
+    rep.check('MODBUS trace', 'every request answered (except injected drops)', not unexpected_miss,
+        f"{len(unanswered)} unanswered, from slaves {sorted({f.get('slave') for f in unanswered})}")
+    if dropped_slaves:
+        rep.check('MODBUS trace', 'injected drops happened', bool(unanswered), f'{len(unanswered)} unanswered requests')
     latencies = [r['ms'] for r in rx if 'ms' in r]
     if latencies:
         stats['latency_ms'] = {'median': statistics.median(latencies), 'max': max(latencies)}
@@ -247,9 +259,25 @@ def main() -> None:
         bt_rx = [(r['epoch'], r['registers'][0]) for r in rx if r.get('slave') == 25 and r.get('fc') == 4 and r.get('registers')]
         mismatched = 0
         for t, v in zip(timex, bt, strict=False):
+            if v == -1: # a lost reading, checked below
+                continue
             near = [val for e, val in bt_rx if abs(e - (start + t)) < 2.5]
             if near and all(abs(v - n) > 1.01 for n in near):
                 mismatched += 1
+        # lost readings (-1) only on the channels of a slave whose requests were dropped; every other channel stays complete
+        channels = {'BT': (profile['temp2'], 25), 'ET': (profile['temp1'], 21)}
+        extra_slaves = [(24, 21), (22, 23)] # per extra device: (slave of curve 1, slave of curve 2)
+        for i, (s1, s2) in enumerate(extra_slaves):
+            if i < len(profile.get('extratemp1', [])):
+                channels[f'extra {i+1}a'] = (profile['extratemp1'][i], s1)
+                channels[f'extra {i+1}b'] = (profile['extratemp2'][i], s2)
+        lost = {name: sum(1 for v in values if v == -1) for name, (values, _) in channels.items()}
+        stats['lost_readings'] = lost
+        others_clean = all(n == 0 for name, n in lost.items() if channels[name][1] not in dropped_slaves)
+        rep.check('roast profile', 'no lost readings on channels without injected faults', others_clean, str(lost))
+        if dropped_slaves:
+            rep.check('roast profile', 'lost readings only where replies were dropped',
+                any(n > 0 for name, n in lost.items() if channels[name][1] in dropped_slaves), str(lost))
         rep.check('roast profile', 'BT curve matches the values on the wire', mismatched <= 2, f'{mismatched} of {len(bt)} samples without a matching reading')
         strings = profile.get('specialeventsStrings', [])
         slider_events = len([s for s in strings if s])
@@ -261,6 +289,8 @@ def main() -> None:
         for etype in (0, 1):
             moves = [e for e in events if e[1] == etype and e[3] and not e[3].startswith('Q')]
             for k, move in enumerate(moves):
+                if (23 if etype == 0 else 22, 8193, move[2] * 10) in rejected:
+                    continue # the drive refused this value, so the readback is not expected to follow it
                 nxt = moves[k + 1][0] if k + 1 < len(moves) else float('inf')
                 qs = [e for e in events if e[1] == etype and e[3].startswith('Q') and move[0] <= e[0] < nxt]
                 if qs:

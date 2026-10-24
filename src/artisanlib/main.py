@@ -28149,6 +28149,20 @@ def main() -> None:
     from artisanlib import touch_controls
     touch_controls.install(appWindow)
 
+    # with a settings profile this instance does not fall back to the viewer when another Artisan runs;
+    # warn if the installed Artisan is open, as only one of them can use the machine's port
+    if application_settings_profile and not app.artisanviewerMode:
+        try:
+            import psutil
+            if any((p.info.get('name') or '').lower() in {'artisan.exe', 'artisan'} for p in psutil.process_iter(['name'])):
+                other_instance_box = QMessageBox(appWindow)
+                other_instance_box.setIcon(QMessageBox.Icon.Warning)
+                other_instance_box.setWindowTitle(QApplication.translate('Message', 'Artisan is already running'))
+                other_instance_box.setText(QApplication.translate('Message', 'The installed Artisan is open. Only one of them can talk to the roaster: close the other one before pressing ON.'))
+                other_instance_box.open()
+        except Exception as e: # pylint: disable=broad-except
+            _log.exception(e)
+
     # inform the user the debug logging is on
     if debugLogLevelActive():
         appWindow.sendmessage(QApplication.translate('Message', 'debug logging ON'))

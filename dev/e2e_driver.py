@@ -34,9 +34,12 @@ DRY_AT, FCS_AT, DROP_AT = 329, 540, 680
 
 
 class Driver:
-    def __init__(self, speed: float, port: int, out: Path, maximize: bool = False) -> None:
+    def __init__(self, speed: float, port: int, out: Path, maximize: bool = False, faults: str = '') -> None:
         self.speed = speed
         self.maximize = maximize
+        # faults injected by the simulator, eg. 'drop=25:7;reject=22:8193:250'
+        self.faults = faults
+        self.rejects = {tuple(int(x) for x in f.split('=', 1)[1].split(':')) for f in faults.split(';') if f.startswith('reject=')}
         self.sim = ModbusTcpClient('127.0.0.1', port=port)
         self.out = out.open('a', encoding='utf-8', buffering=1)
         self.aw: Any = None
@@ -183,6 +186,29 @@ class Driver:
             QTimer.singleShot(30000, lambda: os._exit(3)) # watchdog in case a dialog blocks quitting
             aw.close()
 
+        # the display preset is offered once on a fresh profile; answer it like a person would
+        def answer_preset_prompt() -> bool:
+            from PyQt6.QtWidgets import QMessageBox
+            box = aw.findChild(QMessageBox, 'touchPresetPrompt')
+            if box is not None and box.isVisible():
+                yes = box.button(QMessageBox.StandardButton.Yes)
+                if yes is not None:
+                    self.tap(yes, 'preset prompt Yes', touch=False)
+                    return True
+            if time.time() - self.step_started > 8:
+                self.record('preset_prompt_missing')
+                return True
+            return False
+
+        # after a fan/drum command: the panel shows it as not confirmed exactly when the simulator rejected it
+        def check_panel_confirmation(section: str, slave: int, register: int, value: int) -> None:
+            from PyQt6.QtWidgets import QLabel
+            label = aw.findChild(QLabel, f'touch_{section}_actual')
+            text = label.text() if label is not None else ''
+            rejected = (slave, register, value) in self.rejects
+            self.check(('not confirmed' in text) == rejected,
+                f"panel shows {section} {value // 10} as {'not confirmed' if rejected else 'confirmed'} (shows '{text}')")
+
         def check_window() -> None:
             g = aw.frameGeometry()
             screen = aw.screen()
@@ -192,7 +218,8 @@ class Driver:
                     f'window fills the screen ({g.width()}x{g.height()} of {avail.width()}x{avail.height()})')
 
         self.steps = [
-            ('settle', wait(4)),
+            ('preset prompt', answer_preset_prompt),
+            ('settle', wait(2)),
             ('window', once(check_window)),
             ('ON', once(lambda: self.tap(aw.buttonONOFF, 'ON'))),
             ('sampling', wait(5)),
@@ -213,6 +240,8 @@ class Driver:
             ('panel fan 120', once(lambda: self.panel_taps(['touch_fan_preset_120'], 'fan slider', 120, [(23, 8193, 1200)]))),
             ('heat 190', once(lambda: self.drag(aw.slider4, 'heat slider', 190, touch=False))),
             ('panel drum 25', once(lambda: self.panel_taps(['touch_drum_preset_25'], 'drum slider', 25, [(22, 8193, 250)]))),
+            ('drum 25 outcome', wait(1.5)),
+            ('check drum 25', once(lambda: check_panel_confirmation('drum', 22, 8193, 250))),
             ('to mid', until_roast(450)),
             # four quick -5 taps: one command (1000) after the taps stop, not four
             ('panel fan -20', once(lambda: self.panel_taps(['touch_fan_minus'] * 4, 'fan slider', 100, [(23, 8193, 1000)], exactly=1))),
@@ -252,7 +281,7 @@ class Driver:
                             QApplication.processEvents()
                         g = w.frameGeometry()
                         self.record('app_ready', settings=QApplication.applicationName(), speed=self.speed, maximized=self.maximize,
-                            window=[g.x(), g.y(), g.width(), g.height()])
+                            window=[g.x(), g.y(), g.width(), g.height()], faults=self.faults)
                         self.build()
                         self.step_started = time.time()
                 return
@@ -277,12 +306,13 @@ def main() -> None:
     ap.add_argument('--speed', type=float, default=4.0)
     ap.add_argument('--port', type=int, default=5020)
     ap.add_argument('--maximize', action='store_true', help='maximize the window, as used at the roaster')
+    ap.add_argument('--faults', default='', help="faults injected by the simulator, eg. 'drop=25:7;reject=22:8193:250'")
     args = ap.parse_args()
     session = Path(os.environ.get('ARTISAN_SESSION_DIR', Path.home() / 'artisan-sessions'))
     session.mkdir(parents=True, exist_ok=True)
 
     from artisanlib import main as artisan_main # creates the QApplication
-    driver = Driver(args.speed, args.port, session / f'driver-{datetime.datetime.now(datetime.UTC).astimezone():%Y%m%d-%H%M%S}.jsonl', args.maximize)
+    driver = Driver(args.speed, args.port, session / f'driver-{datetime.datetime.now(datetime.UTC).astimezone():%Y%m%d-%H%M%S}.jsonl', args.maximize, args.faults)
     timer = QTimer()
     timer.timeout.connect(driver.tick)
     timer.start(100)

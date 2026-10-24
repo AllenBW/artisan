@@ -41,8 +41,14 @@ log = logging.getLogger('fz94_sim')
 
 
 class FZ94:
-    def __init__(self, speed: float) -> None:
+    def __init__(self, speed: float, drops: dict[int, tuple[int, int]] | None = None, rejects: set[tuple[int, int, int]] | None = None) -> None:
         self.speed = speed
+        # fault injection: slave -> (every, run): of every EVERY requests to it, RUN in a row get no answer
+        # (timeouts, like a burst of noise on RS-485 that a single retry does not get through);
+        # (slave, register, value) writes answered with exception 3 (illegal data value, like a drive refusing a value)
+        self.drops = drops or {}
+        self.rejects = rejects or set()
+        self.request_counts: dict[int, int] = {}
         self.charged_at: float | None = None
         self.dropped_at: float | None = None
         drive = lambda: {'hr': {2: 0, 8192: 1, 8193: 300}} # noqa: E731
@@ -125,6 +131,9 @@ class FZ94:
             return bytes([fc, 2 * count]) + struct.pack(f'>{count}H', *values)
         if fc == 6 and len(pdu) == 5:
             register, value = struct.unpack('>HH', pdu[1:5])
+            if (slave, register, value) in self.rejects:
+                log.info('fault: rejected write slave %d register %d value %d', slave, register, value)
+                return exception(3)
             table = self.slaves[slave].get('hr', {})
             if register not in table:
                 return exception(ILLEGAL_ADDRESS)
@@ -149,6 +158,11 @@ class FZ94:
                 header = await reader.readexactly(7) # MBAP: transaction id, protocol id, length, unit id
                 tid, pid, length, unit = struct.unpack('>HHHB', header)
                 pdu = await reader.readexactly(length - 1)
+                self.request_counts[unit] = self.request_counts.get(unit, 0) + 1
+                every, run = self.drops.get(unit, (0, 0))
+                if every and self.request_counts[unit] % every < run:
+                    log.info('fault: dropped request %d to slave %d', self.request_counts[unit], unit)
+                    continue
                 response = self.handle(unit, pdu)
                 writer.write(struct.pack('>HHHB', tid, pid, len(response) + 1, unit) + response)
                 await writer.drain()
@@ -163,9 +177,13 @@ async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', type=int, default=5020)
     ap.add_argument('--speed', type=float, default=1.0, help='roast time runs this many times faster than real time')
+    ap.add_argument('--drop', action='append', default=[], metavar='SLAVE:EVERY:RUN', help='of every EVERY requests to SLAVE, leave RUN in a row unanswered')
+    ap.add_argument('--reject', action='append', default=[], metavar='SLAVE:REGISTER:VALUE', help='answer this write with exception 3')
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
-    sim = FZ94(args.speed)
+    drops = {int(s): (int(n), int(r)) for s, n, r in (d.split(':') for d in args.drop)}
+    rejects = {tuple(int(x) for x in r.split(':')) for r in args.reject}
+    sim = FZ94(args.speed, drops, rejects) # type: ignore[arg-type]
     server = await asyncio.start_server(sim.serve_client, '127.0.0.1', args.port)
     log.info('FZ94 simulator on 127.0.0.1:%d (speed x%g)', args.port, args.speed)
     async with server:

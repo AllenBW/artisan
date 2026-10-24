@@ -19,6 +19,7 @@ param(
     [double]$Speed = 4,
     [int]$Port = 5020,
     [switch]$Maximize,                   # maximize the window, as used at the roaster
+    [switch]$Faults,                     # inject faults: BT replies dropped in bursts, the drum 25 command rejected
     [string]$Venv = (Join-Path $env:LOCALAPPDATA 'artisan-dev\.venv')
 )
 
@@ -51,7 +52,10 @@ if ($modbus.type -ne 3 -or $modbus.host -ne '127.0.0.1') { throw 'Safety check f
 Write-Host "Profile Artisan-E2E -> MODBUS TCP 127.0.0.1:$Port (simulator), results in $run" -ForegroundColor Cyan
 
 # 2. simulator, 3. screen recording
-$sim = Start-Process $py -ArgumentList (Join-Path $repo 'dev\fz94_sim.py'), '--port', $Port, '--speed', $Speed -PassThru -WindowStyle Hidden `
+$faultSpec = if ($Faults) { 'drop=25:10:3;reject=22:8193:250' } else { '' }
+$simArgs = @((Join-Path $repo 'dev\fz94_sim.py'), '--port', $Port, '--speed', $Speed)
+if ($Faults) { $simArgs += @('--drop', '25:10:3', '--reject', '22:8193:250') }
+$sim = Start-Process $py -ArgumentList $simArgs -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $run 'simulator.out.log') -RedirectStandardError (Join-Path $run 'simulator.log')
 Start-Sleep 2
 $seconds = [int](680 / $Speed + 150)
@@ -67,6 +71,7 @@ $env:ARTISAN_SESSION_DIR = $run
 try {
     $driverArgs = @((Join-Path $repo 'dev\e2e_driver.py'), '--speed', $Speed, '--port', $Port)
     if ($Maximize) { $driverArgs += '--maximize' }
+    if ($faultSpec) { $driverArgs += @('--faults', $faultSpec) }
     & $py @driverArgs
     Write-Host "Artisan exited with code $LASTEXITCODE"
 } finally {

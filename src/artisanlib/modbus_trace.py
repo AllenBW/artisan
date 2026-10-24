@@ -104,20 +104,62 @@ def _write(record:dict[str, Any]) -> None:
         _file.write(json.dumps(record) + '\n')
 
 
+# expected length of an RTU response frame from its first bytes, or None if not yet known
+def rtu_response_length(frame:bytes) -> int|None:
+    if len(frame) < 2:
+        return None
+    fc = frame[1]
+    if fc & 0x80:
+        return 5 # slave, function|0x80, exception code, crc
+    if fc in {1, 2, 3, 4}:
+        return 5 + frame[2] if len(frame) >= 3 else None # slave, function, byte count, data, crc
+    if fc in {5, 6, 15, 16}:
+        return 8 # echo of address and value/quantity
+    return len(frame) # unknown function: log what arrived
+
+
+# on serial lines pymodbus passes every partial receive buffer (and the growing buffer again); a response is logged
+# once, when it is complete, with the number of pieces it arrived in
+_rx_pieces:int = 0
+_last_rx:bytes = b''
+_last_tx_slave:int|None = None
+
+
 def trace_packet(sending:bool, data:bytes) -> bytes:
-    global _last_tx # pylint: disable=global-statement
+    global _last_tx, _rx_pieces, _last_rx, _last_tx_slave # pylint: disable=global-statement
     try:
         now = time.time()
         direction = 'tx' if sending else 'rx'
-        record:dict[str, Any] = {'epoch': round(now, 4), 'dir': direction, 'hex': data.hex(' ')}
-        if not sending and _last_tx:
-            record['ms'] = round((now - _last_tx) * 1000, 1) # time since the request was sent
+        record:dict[str, Any] = {'epoch': round(now, 4), 'dir': direction}
+        frame = data
         if sending:
             _last_tx = now
+            _rx_pieces, _last_rx = 0, b''
+            _last_tx_slave = data[0] if data and _framing == 'rtu' else None
+        elif _framing == 'rtu':
+            _rx_pieces += 1
+            if _last_tx_slave is not None and data and data[0] != _last_tx_slave:
+                if data != _last_rx: # bytes not from the addressed slave: line noise or a late reply
+                    _last_rx = data
+                    _write({**record, 'hex': data.hex(' '), 'noise': True})
+                return data
+            expected = rtu_response_length(data)
+            if expected is None or len(data) < expected:
+                return data # incomplete, wait for the rest
+            frame = data[:expected]
+            if frame == _last_rx:
+                return data # the same complete frame passed again
+            _last_rx = frame
+            record['pieces'] = _rx_pieces
+            if len(data) > expected:
+                record['extra'] = data[expected:].hex(' ')
+        record['hex'] = frame.hex(' ')
+        if not sending and _last_tx:
+            record['ms'] = round((now - _last_tx) * 1000, 1) # time since the request was sent
         if _framing == 'rtu':
-            record.update(decode_rtu(direction, data))
+            record.update(decode_rtu(direction, frame))
         elif _framing == 'tcp':
-            record.update(decode_tcp(direction, data))
+            record.update(decode_tcp(direction, frame))
         _write(record)
     except Exception as e: # pylint: disable=broad-except
         _log.debug(e)

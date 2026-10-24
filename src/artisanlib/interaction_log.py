@@ -29,7 +29,7 @@ import logging
 from pathlib import Path
 from typing import override, Final, Any, TextIO, TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QObject, QEvent, QPoint, QTimer
+from PyQt6.QtCore import QObject, QEvent, QPoint, QTimer
 from PyQt6.QtGui import QMouseEvent, QKeyEvent, QWheelEvent, QTouchEvent, QKeySequence, QPointerEvent
 from PyQt6.QtWidgets import (QApplication, QWidget, QDialog, QMenu, QAbstractButton, QAbstractSlider, QComboBox,
     QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QTabBar)
@@ -238,11 +238,11 @@ class InteractionLogger(QObject): # pyright: ignore[reportGeneralTypeIssues]
                 key = (etype, event.timestamp(), event.key(), -1)
                 if key != self.last_key:
                     self.last_key = key
-                    mods = event.modifiers()
+                    # in a text input every key that produces a character is typing, whatever the modifiers (AltGr is
+                    # reported as Ctrl+Alt); shortcuts like Ctrl+C produce control characters and are still logged
                     typing = any(isinstance(w, _TEXT_INPUTS) or (isinstance(w, QComboBox) and w.isEditable())
                             for w in (obj, QApplication.focusWidget())) and \
-                        event.text().isprintable() and event.text() != '' and \
-                        not mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier)
+                        event.text().isprintable() and event.text() != ''
                     self.write({'type': 'KeyPress', 'key': '<text>' if typing else QKeySequence(event.keyCombination()).toString(),
                         'widget': self.describe(obj)})
             elif etype == QEvent.Type.Wheel and isinstance(event, QWheelEvent):

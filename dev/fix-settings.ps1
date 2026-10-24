@@ -8,6 +8,8 @@
        so quantified events were logged as fan x1.2 and drum x0.5, and the sliders were moved to those wrong values.
     2. Sampling interval (dev profile only): 2 s, as the installed Artisan 3.1.0 samples by default
        (Artisan 4.2.1 defaults to 1 s).
+    3. MODBUS serial read retries 1 (all given profiles), so one lost frame does not lose a reading.
+    The script is idempotent: running it again changes nothing that is already set.
 
     Artisan must be closed (it saves its settings on exit). The registry is exported to ~/artisan-backups first.
 #>
@@ -38,6 +40,16 @@ foreach ($name in $Profiles) {
     if (-not (Test-Path "$root\Quantifiers")) { New-Item "$root\Quantifiers" | Out-Null }
     Set-ItemProperty "$root\Quantifiers" -Name quantifiermax -Type MultiString -Value $after
     Write-Host ("{0}: quantifiermax {1} -> {2} (slidermax {3}, active {4})" -f $name, ($before -join ','), ($after -join ','), ($slidermax -join ','), ($active -join ','))
+}
+
+# 3. MODBUS read retries (all given profiles): one retry, so a single lost frame on the RS-485 line no longer
+#    becomes a lost reading (the audit found retries 0 and dropouts in 41 of 50 roasts)
+foreach ($name in $Profiles) {
+    $modbus = "HKCU:\Software\artisan-scope\$name\Modbus"
+    if (-not (Test-Path $modbus)) { continue }
+    $old = (Get-ItemProperty $modbus).serial_readRetries
+    Set-ItemProperty $modbus -Name serial_readRetries -Type DWord -Value 1
+    Write-Host ("{0}: MODBUS serial read retries {1} -> 1" -f $name, $(if ($null -ne $old) { $old } else { 'default' }))
 }
 
 $dev = "HKCU:\Software\artisan-scope\$DevProfile"

@@ -36,6 +36,14 @@ Text typed into input fields is never recorded, only the fact that typing happen
 
 `ARTISAN_MODBUS_TRACE=1` (set by `run-dev.ps1` and `e2e-test.ps1`) writes every frame sent to and received from the machine to `~/artisan-sessions/modbus-<stamp>.jsonl`. Each record has a timestamp, the raw hex, the response latency, and a decode (slave, function, register, count or value, the register values, CRC validity, exceptions). Serial RTU and TCP are decoded; ASCII is logged raw. With the variable unset, nothing changes.
 
+## Communication robustness (this fork)
+
+- **One lost reply only affects its own channel.** A request that gets no valid reply (after retries) no longer cancels the rest of the read pass. Only that device's readings are lost, and the error message names it, e.g. "(device 25 register 1000)".
+- **Writes are confirmed.** Every single-register write is checked: a timeout, an exception reply or a wrong echo puts "Modbus write not confirmed: device … register … value …" in the message line and error log. The touch panel shows "sending…" until the drive confirms, and turns red ("not confirmed by the drive") if it doesn't; re-tapping resends.
+- **Serial trace.** On serial (RTU) lines, each reply is logged once, complete, with the number of pieces it arrived in; bytes from the wrong device are marked `noise`.
+- **Settings.** `fix-settings.ps1` also sets read retries to 1.
+- **Fault test.** `e2e-test.ps1 -Faults` makes the simulator drop BT replies in bursts of three (beating one retry) and reject the drum-25 command. It verifies that only BT loses readings and that the panel flags the rejected command.
+
 ## Notes learned from testing
 
 - Modbus input 1 (slave 25) is **BT**, and input 2 (slave 21) is **ET**. Slave 21 also holds the Drum Heat Limit setpoint (register 50).
