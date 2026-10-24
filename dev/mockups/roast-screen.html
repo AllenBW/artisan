@@ -1,3 +1,5 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>FZ94 Roast Console</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -31,6 +33,7 @@
   --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00; --ph1: #3f9a5f; --ph2: #b88a12; --ph3: #b0603a;
   color-scheme: light }
 
+[hidden] { display: none !important; } /* the sheet and toast set display themselves */
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; }
 .console { box-sizing: border-box; min-height: 100%; display: grid; gap: 12px;
@@ -81,6 +84,8 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .read.bt b { color: var(--bt); font-size: 56px; }
 .read.ror b { color: var(--ror); font-size: 56px; }
 .read.et b { color: var(--et); }
+.read.et.limit { border-color: var(--limit); }
+.read.et.limit .sub { color: var(--limit); }
 .read.exh b { color: var(--exh); }
 
 .phases { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 10px; display: grid; gap: 6px; }
@@ -157,7 +162,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   <header class="top">
     <div class="batch"><b>#161 India Natural</b><span>1400 g in · background: #158 (previous India Natural)</span></div>
     <span class="chip" title="Simulated connection status"><span class="dot"></span>Roaster linked · 2.0 s · 0 dropouts</span>
-    <span class="chip">Heat limit 200 °C · locked</span>
+    <span class="chip" title="Setpoint of the ET controller: the burner is held back when ET reaches it">ET heat limit 200 °C · locked</span>
     <span class="spacer"></span>
     <div class="sim" aria-label="Simulation">
       <span>Simulated roast</span>
@@ -179,8 +184,8 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       <div class="read time"><div><small>Roast time</small><b id="clock">--:--</b></div><div class="sub"><span id="phaseNow">Drying</span><br><span id="vsBg"></span></div></div>
       <div class="read bt"><small>Bean temp</small><b><span id="bt">--</span><span class="unit">°C</span></b></div>
       <div class="read ror"><small>BT rate of rise</small><b><span id="ror">--</span><span class="unit">°/min</span></b></div>
-      <div class="read et"><small>Env temp</small><b><span id="et">--</span><span class="unit">°C</span></b><div class="sub">rate of rise <span id="etror">--</span> °/min</div></div>
-      <div class="read exh"><small>Exhaust</small><b><span id="exh">--</span><span class="unit">°C</span></b><div class="sub">heat limit 200 °C</div></div>
+      <div class="read et" id="etTile"><small>Env temp</small><b><span id="et">--</span><span class="unit">°C</span></b><div class="sub" id="etSub">limit 200 · rise -- °/min</div></div>
+      <div class="read exh"><small>Exhaust</small><b><span id="exh">--</span><span class="unit">°C</span></b><div class="sub">air leaving the drum</div></div>
     </div>
 
     <div class="phases" aria-label="Phase times">
@@ -274,7 +279,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     { key: 'exh', label: 'Exhaust', color: '--exh', on: true },
     { key: 'ror', label: 'BT rate of rise', color: '--ror', on: true },
     { key: 'etror', label: 'ET rate of rise', color: '--etror', on: false },
-    { key: 'limit', label: 'Heat limit', color: '--limit', on: true, dash: true },
+    { key: 'limit', label: 'ET heat limit', color: '--limit', on: true, dash: true },
     { key: 'bgbt', label: '#158 BT', color: '--bg-curve', on: true, dash: true },
     { key: 'bget', label: '#158 ET', color: '--bg-curve', on: false, dash: true },
     { key: 'drives', label: 'Fan & drum', color: '--fan', on: true },
@@ -383,8 +388,17 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
   // ---- phase marks
   const MARK_NAMES = { DRY: 'DRY END', FCs: 'FIRST CRACK', DROP: 'DROP', FCe: 'FC END', SCs: 'SC START', COOL: 'COOL END' };
+  // an early DROP (before 7:00 or before first crack) needs a second tap within 3 s: an accidental DROP ends the roast
+  let dropArmedUntil = 0;
   function mark(name) {
     if (S.marks[name] !== undefined || (S.dropped && name !== 'COOL')) return;
+    if (name === 'DROP' && (S.t < 420 || S.marks.FCs === undefined) && performance.now() > dropArmedUntil) {
+      dropArmedUntil = performance.now() + 3000;
+      setTimeout(render, 3100);
+      render();
+      return;
+    }
+    dropArmedUntil = 0;
     S.marks[name] = S.t;
     addLog(S.t, `${MARK_NAMES[name]} at ${fmt(S.t)} · BT ${cur().bt.toFixed(1)} °C`);
     if (name === 'DROP') { S.dropped = true; setTimeout(openSheet, 900); }
@@ -452,7 +466,9 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     setText('et', s.et.toFixed(0));
     setText('exh', s.exh.toFixed(0));
     setText('ror', s.ror === null ? '--' : s.ror.toFixed(1));
-    setText('etror', s.etror === null ? '--' : s.etror.toFixed(1));
+    const atLimit = s.et >= HEAT_LIMIT - 1;
+    setText('etSub', atLimit ? `at the ${HEAT_LIMIT} limit · burner held back` : `limit ${HEAT_LIMIT} · rise ${s.etror === null ? '--' : s.etror.toFixed(1)} °/min`);
+    document.getElementById('etTile').classList.toggle('limit', atLimit);
     setText('clock', S.t < 0 ? 'preheat' : fmt(S.dropped ? S.marks.DROP : S.t));
     const bgBt = btCurve(Math.max(0, S.t - BG_SHIFT));
     setText('vsBg', S.t > 0 && !S.dropped ? `BT ${(s.bt - bgBt >= 0 ? '+' : '')}${(s.bt - bgBt).toFixed(1)} vs #158` : '');
@@ -473,6 +489,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       b.disabled = S.t < 0 || (S.dropped && name !== 'DROP');
       const sub = document.getElementById(subId);
       if (at !== undefined) sub.textContent = `marked ${fmt(at)} · ${S.samples.find(x => x.t >= at)?.bt.toFixed(0) ?? ''} °C`;
+      else if (name === 'DROP' && performance.now() < dropArmedUntil) sub.textContent = 'early: tap again to drop';
       else if (name === 'FCs') sub.textContent = s.bt >= 183 ? 'listen: crack expected now' : 'expected near 188 °C';
       else sub.textContent = '';
     }
@@ -550,7 +567,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     if (shown.limit) {
       g.setLineDash([2, 4]); g.strokeStyle = css('--limit'); g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(pad.l, Y(HEAT_LIMIT)); g.lineTo(W - pad.r, Y(HEAT_LIMIT)); g.stroke(); g.setLineDash([]);
-      g.fillStyle = css('--limit'); g.textAlign = 'right'; g.textBaseline = 'bottom'; g.fillText('heat limit 200', W - pad.r - 4, Y(HEAT_LIMIT) - 2);
+      g.fillStyle = css('--limit'); g.textAlign = 'right'; g.textBaseline = 'bottom'; g.fillText(`ET heat limit ${HEAT_LIMIT}`, W - pad.r - 4, Y(HEAT_LIMIT) - 2);
     }
 
     const line = (key, color, width, scale) => {
@@ -593,16 +610,20 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     }
   }
 
-  // ---- loop
-  let last = performance.now();
-  function frame(now) {
-    const dt = Math.min(0.25, (now - last) / 1000); last = now;
-    if (S.playing) {
-      let remaining = dt * S.speed;
-      while (remaining > 0) { const d = Math.min(0.5, remaining); step(d); remaining -= d; }
-      if (S.t > 960) S.playing = false;
-      render();
-    }
+  // ---- loop: the roast advances on a timer (keeps running when the tab is in the background, where animation
+  // frames pause); the screen is redrawn on animation frames whenever something changed
+  let last = performance.now(), dirty = true;
+  setInterval(() => {
+    const now = performance.now();
+    const dt = Math.min(5, (now - last) / 1000); last = now;
+    if (!S.playing) return;
+    let remaining = dt * S.speed;
+    while (remaining > 0) { const d = Math.min(0.5, remaining); step(d); remaining -= d; }
+    if (S.t > 960) S.playing = false;
+    dirty = true;
+  }, 100);
+  function frame() {
+    if (dirty) { dirty = false; render(); }
     requestAnimationFrame(frame);
   }
 
