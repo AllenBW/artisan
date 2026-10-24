@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 _log: Final[logging.Logger] = logging.getLogger(__name__)
 
 _MARK_NAMES: Final[list[str]] = ['CHARGE', 'DRY', 'FCs', 'FCe', 'SCs', 'SCe', 'DROP', 'COOL']
+# main window panels whose visibility and on-screen placement is logged on every change
+_PANELS: Final[list[str]] = ['level1frame', 'lowerbuttondialog', 'extrabuttondialogs', 'sliderDock', 'lcdFrame', 'phasesLCDsFrame', 'pidbuttonFrame']
 _POINTER_EVENTS: Final[set[QEvent.Type]] = {QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
     QEvent.Type.MouseButtonDblClick, QEvent.Type.TouchBegin, QEvent.Type.TouchEnd, QEvent.Type.TouchCancel}
 _TEXT_INPUTS: Final[tuple[type, ...]] = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
@@ -80,6 +82,7 @@ class InteractionLogger(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.last_wheel:float = 0
         self.last_state:tuple[bool, bool] = (False, False)
         self.marks_seen:list[bool] = [False]*len(_MARK_NAMES)
+        self.panels:dict[str, tuple[Any, ...]] = {} # last logged (visible, rect) per panel, and the main window geometry
         self.errors:int = 0
 
         screens = [{'name': s.name(), 'geometry': [s.geometry().x(), s.geometry().y(), s.geometry().width(), s.geometry().height()],
@@ -145,8 +148,26 @@ class InteractionLogger(QObject): # pyright: ignore[reportGeneralTypeIssues]
                     if is_set != self.marks_seen[i]:
                         self.marks_seen[i] = is_set
                         self.write({'type': 'mark' if is_set else 'mark_undo', 'what': name})
+            self.poll_panels()
         except Exception as e: # pylint: disable=broad-except
             self.log_error(e)
+
+    # logs panels appearing, disappearing, moving or being resized (eg. pushed off screen), and main window geometry changes
+    def poll_panels(self) -> None:
+        g = self.aw.frameGeometry()
+        win = ('window', self.aw.isMaximized(), self.aw.isFullScreen(), self.aw.isMinimized(), g.x(), g.y(), g.width(), g.height())
+        if self.panels.get('window') != win:
+            self.panels['window'] = win
+            self.write({'type': 'window_geometry', 'maximized': win[1], 'fullscreen': win[2], 'minimized': win[3], 'rect': list(win[4:])})
+        for name in _PANELS:
+            panel = getattr(self.aw, name, None)
+            if not isinstance(panel, QWidget):
+                continue
+            visible = panel.isVisible()
+            rect = self.describe(panel)['rect'] if visible else None
+            if self.panels.get(name) != (visible, rect):
+                self.panels[name] = (visible, rect)
+                self.write({'type': 'panel', 'what': name, 'visible': visible, 'rect': rect})
 
     def log_error(self, e:Exception) -> None:
         self.errors += 1
