@@ -34,6 +34,8 @@ CHANNELS = {'BT': (25, 4, 1000), 'ET': (21, 4, 1000), 'Exhaust': (24, 4, 1000), 
 # Artisan stamps a manual event with the time of the last sample (up to one sampling interval earlier) and stores the
 # roast start (roastepoch) in whole seconds (truncated), so an .alog event time is expected this far from the tap
 MANUAL_MARK_WINDOW = (-3.5, 0.5) # seconds, for 2 s sampling
+# the Windows 11 taskbar covers the bottom 48 logical pixels of the screen when it is shown over a window
+TASKBAR_PX = 48
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -103,6 +105,8 @@ def main() -> None:
         if r['action'] == 'check':
             rep.check('driver', r['what'], r['ok'])
     stats['marks_auto'] = {r['mark']: r['action'] == 'mark_seen' for r in driver if r['action'] in {'mark_seen', 'mark_missing'}}
+    ready = next((r for r in driver if r['action'] == 'app_ready'), {})
+    stats['speed'], stats['maximized'] = ready.get('speed'), ready.get('maximized')
 
     # 1. every tap and drag of the driver is in the interaction log, on the right widget, with the right device
     presses = [r for r in inter if r['type'] == 'MouseButtonPress']
@@ -123,6 +127,41 @@ def main() -> None:
         rel = [p for p in releases if drag_start['epoch'] - 0.01 <= p['epoch'] <= a['epoch'] and 'Slider' in p['widget']['class']][:1]
         ok = bool(rel) and rel[0]['widget'].get('value') == a['value']
         rep.check('interaction log', f"drag {a['target']} to {a['value']}", ok, f"logged value {rel[0]['widget'].get('value')}" if rel else 'not logged')
+    # a slider keeps the value it was last set to (quantifiers must not move it to a different value)
+    last_set: dict[str, int] = {}
+    for a in driver:
+        if a['action'] == 'drag_start' and a['target'] in last_set:
+            rep.check('sliders', f"{a['target']} still at {last_set[a['target']]} before the next move", a['value'] == last_set[a['target']],
+                f"found {a['value']}")
+        if a['action'] == 'drag_end':
+            last_set[a['target']] = a['value']
+
+    # the custom buttons and the event buttons stay visible and on screen while the roaster is in use
+    screens = next((r.get('screens') for r in inter if r['type'] == 'session_start'), None) or []
+    screen_h = max((s['geometry'][1] + s['geometry'][3] for s in screens), default=None)
+    t_on = next((r['epoch'] for r in inter if r['type'] == 'state' and r['what'] == 'ON'), None)
+    t_off = next((r['epoch'] for r in inter if r['type'] == 'state' and r['what'] == 'OFF'), None)
+    t_start = next((r['epoch'] for r in inter if r['type'] == 'state' and r['what'] == 'START'), None)
+    t_stop = next((r['epoch'] for r in inter if r['type'] == 'state' and r['what'] == 'STOP'), None)
+    for panel, label, since, until in (('extrabuttondialogs', 'Fan/Drum buttons', t_on, t_off),
+            ('lowerbuttondialog', 'CHARGE..DROP buttons', t_start, t_stop)): # the event buttons are only shown while recording
+        if since is None or until is None:
+            continue
+        state = None
+        problems = []
+        for r in (r for r in inter if r['type'] == 'panel' and r['what'] == panel):
+            state = r
+            if since <= r['epoch'] < until:
+                if not r['visible']:
+                    problems.append(f"hidden at +{r['epoch'] - t0:.0f} s")
+                elif screen_h is not None and r['rect'] and r['rect'][1] + r['rect'][3] > screen_h:
+                    problems.append(f"off screen at +{r['epoch'] - t0:.0f} s ({r['rect']})")
+                elif screen_h is not None and r['rect'] and r['rect'][1] + r['rect'][3] > screen_h - TASKBAR_PX:
+                    problems.append(f"in the taskbar zone (bottom {TASKBAR_PX} px) at +{r['epoch'] - t0:.0f} s ({r['rect']})")
+        if state is not None and state['epoch'] < since and not state['visible']:
+            problems.append('hidden when sampling started')
+        rep.check('layout', f'{label} visible and on screen while in use', not problems, '; '.join(problems) or f"last placement {state['rect'] if state else None}")
+
     states = [r['what'] for r in inter if r['type'] == 'state']
     rep.check('interaction log', 'ON / START / OFF states', all(s in states for s in ('ON', 'START', 'OFF')), ', '.join(states))
     marks = {r['what']: r['epoch'] for r in inter if r['type'] == 'mark'}
@@ -204,8 +243,23 @@ def main() -> None:
             if near and all(abs(v - n) > 1.01 for n in near):
                 mismatched += 1
         rep.check('roast profile', 'BT curve matches the values on the wire', mismatched <= 2, f'{mismatched} of {len(bt)} samples without a matching reading')
-        slider_events = len([s for s in profile.get('specialeventsStrings', []) if s])
+        strings = profile.get('specialeventsStrings', [])
+        slider_events = len([s for s in strings if s])
         rep.check('roast profile', 'slider moves recorded as events', slider_events > 0, f'{len(profile.get("specialevents", []))} events')
+        # quantified events (Q..) from the drive readbacks settle at the value the slider was set to
+        events = [(profile['specialevents'][n], profile['specialeventstype'][n], round((profile['specialeventsvalue'][n] - 1) * 10), strings[n] if n < len(strings) else '')
+            for n in range(len(profile.get('specialevents', [])))]
+        etypes = profile.get('etypes', ['Air', 'Drum', 'Damper', 'Burner'])
+        for etype in (0, 1):
+            moves = [e for e in events if e[1] == etype and e[3] and not e[3].startswith('Q')]
+            for k, move in enumerate(moves):
+                nxt = moves[k + 1][0] if k + 1 < len(moves) else float('inf')
+                qs = [e for e in events if e[1] == etype and e[3].startswith('Q') and move[0] <= e[0] < nxt]
+                if qs:
+                    rep.check('quantifiers', f'{etypes[etype]} readback settles at the slider value {move[2]}', abs(qs[-1][2] - move[2]) <= 1,
+                        f'last quantified event {qs[-1][3]}')
+    if stats.get('speed', 0) and stats['speed'] <= 1:
+        rep.check('driver', 'DROP auto-detected (real-time roast)', stats['marks_auto'].get('DROP', False))
 
     # 4. screen recording covers the session
     if session_p:

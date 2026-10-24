@@ -18,6 +18,7 @@
 param(
     [double]$Speed = 4,
     [int]$Port = 5020,
+    [switch]$Maximize,                   # maximize the window, as used at the roaster
     [string]$Venv = (Join-Path $env:LOCALAPPDATA 'artisan-dev\.venv')
 )
 
@@ -50,7 +51,7 @@ Write-Host "Profile Artisan-E2E -> MODBUS TCP 127.0.0.1:$Port (simulator), resul
 $sim = Start-Process $py -ArgumentList (Join-Path $repo 'dev\fz94_sim.py'), '--port', $Port, '--speed', $Speed -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $run 'simulator.out.log') -RedirectStandardError (Join-Path $run 'simulator.log')
 Start-Sleep 2
-$seconds = [int](680 / $Speed + 90)
+$seconds = [int](680 / $Speed + 150)
 $rec = Start-Process powershell -ArgumentList '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repo 'dev\record-session.ps1'), '-NoAudio', '-Seconds', $seconds, '-OutDir', $run `
     -PassThru -WindowStyle Hidden
 Start-Sleep 2
@@ -61,7 +62,9 @@ $env:ARTISAN_INTERACTION_LOG = '1'
 $env:ARTISAN_MODBUS_TRACE = '1'
 $env:ARTISAN_SESSION_DIR = $run
 try {
-    & $py (Join-Path $repo 'dev\e2e_driver.py') --speed $Speed --port $Port
+    $driverArgs = @((Join-Path $repo 'dev\e2e_driver.py'), '--speed', $Speed, '--port', $Port)
+    if ($Maximize) { $driverArgs += '--maximize' }
+    & $py @driverArgs
     Write-Host "Artisan exited with code $LASTEXITCODE"
 } finally {
     Write-Host 'Waiting for the screen recording to finish ...'

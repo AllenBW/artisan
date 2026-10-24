@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO / 'src'))
 os.chdir(REPO / 'src')
 
 from PyQt6.QtCore import Qt, QPoint, QPointF, QTimer, QEvent # noqa: E402
-from PyQt6.QtGui import QMouseEvent, QPointingDevice, QInputDevice # noqa: E402
+from PyQt6.QtGui import QMouseEvent, QPointingDevice, QPointingDeviceUniqueId, QInputDevice # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget, QSlider, QStyle, QStyleOptionSlider # noqa: E402
 from pymodbus.client import ModbusTcpClient # noqa: E402
 
@@ -34,13 +34,15 @@ DRY_AT, FCS_AT, DROP_AT = 329, 540, 680
 
 
 class Driver:
-    def __init__(self, speed: float, port: int, out: Path) -> None:
+    def __init__(self, speed: float, port: int, out: Path, maximize: bool = False) -> None:
         self.speed = speed
+        self.maximize = maximize
         self.sim = ModbusTcpClient('127.0.0.1', port=port)
         self.out = out.open('a', encoding='utf-8', buffering=1)
         self.aw: Any = None
+        # parented to the application so it is destroyed with it and never outlives Qt on exit
         self.touch = QPointingDevice('e2e touchscreen', 4242, QInputDevice.DeviceType.TouchScreen,
-            QPointingDevice.PointerType.Finger, QInputDevice.Capability.Position, 10, 0)
+            QPointingDevice.PointerType.Finger, QInputDevice.Capability.Position, 10, 0, '', QPointingDeviceUniqueId(), QApplication.instance())
         self.mouse = QPointingDevice.primaryPointingDevice()
         self.steps: list[tuple[str, Callable[[], bool]]] = []
         self.step_started = 0.0
@@ -84,13 +86,15 @@ class Driver:
         self.send(slider, QEvent.Type.MouseButtonPress, handle, device, Qt.MouseButton.LeftButton)
         pos = QPoint(handle)
         direction = -1 if value > before else 1 # vertical sliders: up increases the value
-        for _ in range(600):
+        for _ in range(slider.height() + slider.width() + 100): # one pixel per step, across the whole slider
             if (direction == -1 and slider.value() >= value) or (direction == 1 and slider.value() <= value):
                 break
             pos.setY(pos.y() + direction)
             self.send(slider, QEvent.Type.MouseMove, pos, device, Qt.MouseButton.LeftButton)
         self.send(slider, QEvent.Type.MouseButtonRelease, pos, device, Qt.MouseButton.NoButton)
         self.record('drag_end', target=name, value=slider.value(), goal=value)
+        if slider.value() != value:
+            self.check(False, f'{name} reached {value} (stopped at {slider.value()})')
 
     def extra_button(self, label: str) -> QWidget:
         for b in self.aw.buttonlist:
@@ -159,8 +163,17 @@ class Driver:
             QTimer.singleShot(30000, lambda: os._exit(3)) # watchdog in case a dialog blocks quitting
             aw.close()
 
+        def check_window() -> None:
+            g = aw.frameGeometry()
+            screen = aw.screen()
+            if self.maximize and screen is not None:
+                avail = screen.availableGeometry()
+                self.check(g.height() >= 0.9 * avail.height() and g.width() >= 0.9 * avail.width(),
+                    f'window fills the screen ({g.width()}x{g.height()} of {avail.width()}x{avail.height()})')
+
         self.steps = [
             ('settle', wait(4)),
+            ('window', once(check_window)),
             ('ON', once(lambda: self.tap(aw.buttonONOFF, 'ON'))),
             ('sampling', wait(5)),
             ('START', once(lambda: self.tap(aw.buttonSTARTSTOP, 'START', touch=False))),
@@ -204,7 +217,16 @@ class Driver:
                     if type(w).__name__ == 'ApplicationWindow' and w.isVisible():
                         self.aw = w
                         assert self.sim.connect(), 'simulator not reachable'
-                        self.record('app_ready', settings=QApplication.applicationName())
+                        if self.maximize: # the layout used at the roaster: the full available screen area
+                            screen = w.screen()
+                            if screen is not None:
+                                w.setWindowState(Qt.WindowState.WindowNoState)
+                                w.setGeometry(screen.availableGeometry())
+                            w.showMaximized()
+                            QApplication.processEvents()
+                        g = w.frameGeometry()
+                        self.record('app_ready', settings=QApplication.applicationName(), speed=self.speed, maximized=self.maximize,
+                            window=[g.x(), g.y(), g.width(), g.height()])
                         self.build()
                         self.step_started = time.time()
                 return
@@ -228,12 +250,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--speed', type=float, default=4.0)
     ap.add_argument('--port', type=int, default=5020)
+    ap.add_argument('--maximize', action='store_true', help='maximize the window, as used at the roaster')
     args = ap.parse_args()
     session = Path(os.environ.get('ARTISAN_SESSION_DIR', Path.home() / 'artisan-sessions'))
     session.mkdir(parents=True, exist_ok=True)
 
     from artisanlib import main as artisan_main # creates the QApplication
-    driver = Driver(args.speed, args.port, session / f'driver-{datetime.datetime.now(datetime.UTC).astimezone():%Y%m%d-%H%M%S}.jsonl')
+    driver = Driver(args.speed, args.port, session / f'driver-{datetime.datetime.now(datetime.UTC).astimezone():%Y%m%d-%H%M%S}.jsonl', args.maximize)
     timer = QTimer()
     timer.timeout.connect(driver.tick)
     timer.start(100)
