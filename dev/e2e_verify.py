@@ -133,7 +133,7 @@ def main() -> None:
         if a['action'] == 'drag_start' and a['target'] in last_set:
             rep.check('sliders', f"{a['target']} still at {last_set[a['target']]} before the next move", a['value'] == last_set[a['target']],
                 f"found {a['value']}")
-        if a['action'] == 'drag_end':
+        if a['action'] in {'drag_end', 'set'}:
             last_set[a['target']] = a['value']
 
     # the custom buttons and the event buttons stay visible and on screen while the roaster is in use
@@ -207,6 +207,14 @@ def main() -> None:
     for a in (r for r in driver if r['action'] == 'tap' and r['target'] in BUTTON_WRITES):
         slave, register, value = BUTTON_WRITES[a['target']]
         rep.check('MODBUS trace', f"{a['target']} wrote {value} to slave {slave} register {register}", written(slave, register, value, a['epoch']))
+    # writes the driver declared for its actions (touch panel): the value, and where stated, how many commands
+    for a in (r for r in driver if r['action'] == 'expect_write'):
+        slave, register, value, after, within = a['slave'], a['register'], a['value'], a['after'], a['within']
+        what = f'touch panel wrote {value} to slave {slave} register {register}'
+        rep.check('MODBUS trace', what, written(slave, register, value, after, within))
+        if a.get('exactly') is not None:
+            n = len([r for r in writes if r['slave'] == slave and r['register'] == register and after - 0.2 <= r['epoch'] <= after + within])
+            rep.check('MODBUS trace', f"{what} as exactly {a['exactly']} command(s)", n == a['exactly'], f'{n} commands')
     for a in (r for r in driver if r['action'] == 'drag_end' and r['target'] in SLIDER_WRITES):
         slave, register, factor = SLIDER_WRITES[a['target']]
         rep.check('MODBUS trace', f"{a['target']} {a['value']} wrote {a['value'] * factor} to slave {slave} register {register}",

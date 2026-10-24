@@ -1,0 +1,541 @@
+<title>FZ94 Roast Console</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: instrument console. Chart left, readouts and marks right, fan/drum controls under the chart; nothing in the bottom 48 px. */
+:root {
+  --bg: #14110f; --surface: #1e1a17; --raised: #29231f; --line: #3b332d;
+  --fg: #f1e9df; --muted: #a3968a;
+  --bt: #ff6b3d; --et: #6fb7ff; --ror: #f5c451; --bg-curve: #8a7a6c;
+  --fan: #48c9b0; --drum: #b49cf0; --accent: #e9a23b;
+  --good: #5ec27a; --warn: #f2c14e; --crit: #ef5b5b;
+  --display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --body: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', Consolas, monospace;
+  --tap: 64px; /* about 10 mm on the 15" roaster touchscreen */
+  --safe-bottom: 48px; /* the Windows taskbar strip */
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #eceeea; --surface: #ffffff; --raised: #f3f4f1; --line: #d3d6cf;
+  --fg: #1d1b19; --muted: #6b665f; --bg-curve: #a59a8f;
+  --bt: #e04e1f; --et: #2c7fd6; --ror: #b8860b; --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00;
+  color-scheme: light } }
+:root[data-theme="light"] {
+  --bg: #eceeea; --surface: #ffffff; --raised: #f3f4f1; --line: #d3d6cf;
+  --fg: #1d1b19; --muted: #6b665f; --bg-curve: #a59a8f;
+  --bt: #e04e1f; --et: #2c7fd6; --ror: #b8860b; --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00;
+  color-scheme: light }
+
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; }
+.console { box-sizing: border-box; min-height: 100%; display: grid; gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-rows: auto minmax(320px, 1fr) auto;
+  grid-template-areas: "top top" "chart side" "controls side";
+  padding-block: 12px var(--safe-bottom);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+@media (max-width: 900px) {
+  .console { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "side" "chart" "controls"; grid-template-rows: auto auto 360px auto; }
+}
+button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+/* top bar */
+.top { grid-area: top; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+.batch { display: flex; flex-direction: column; min-width: 0; }
+.batch b { font-family: var(--display); font-size: 26px; letter-spacing: .02em; font-weight: 600; }
+.batch span { color: var(--muted); font-size: 13px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+.spacer { flex: 1; }
+.sim { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+.sim button { min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
+.sim button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+/* chart */
+.chart { grid-area: chart; position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; min-height: 0; }
+.chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.legend { position: absolute; top: 10px; left: 56px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+
+/* side: readouts and marks */
+.side { grid-area: side; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.read { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.read small { display: block; font-family: var(--display); font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.read b { display: block; font-family: var(--display); font-weight: 600; font-variant-numeric: tabular-nums; font-size: 44px; line-height: 1.05; }
+.read.big { grid-column: span 2; }
+.read.big b { font-size: 76px; color: var(--bt); }
+.read .unit { font-size: .45em; color: var(--muted); margin-left: 2px; }
+.read.ror b { color: var(--ror); }
+.read.et b { color: var(--et); font-size: 34px; }
+.read .sub { font-size: 13px; color: var(--muted); }
+
+.marks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.mark { min-height: var(--tap); border-radius: 10px; border: 1px solid var(--line); background: var(--raised); font-family: var(--display); font-weight: 600; font-size: 24px; letter-spacing: .04em; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; }
+.mark small { font-family: var(--body); font-weight: 400; font-size: 12px; letter-spacing: 0; color: var(--muted); }
+.mark.fcs { grid-column: span 2; min-height: 96px; font-size: 34px; border-color: var(--accent); }
+.mark.cue { animation: cue 1.4s ease-in-out infinite; background: color-mix(in srgb, var(--accent) 22%, var(--raised)); }
+.mark.done { border-color: var(--good); color: var(--good); }
+.mark.drop { border-color: var(--crit); }
+.mark:disabled { opacity: .4; cursor: default; }
+@keyframes cue { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .mark.cue { animation: none; } }
+.more { display: flex; gap: 6px; flex-wrap: wrap; }
+.more button { min-height: 44px; flex: 1; border-radius: 8px; border: 1px dashed var(--line); background: transparent; color: var(--muted); font-size: 13px; }
+.log { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; color: var(--muted); max-height: 150px; overflow: auto; font-variant-numeric: tabular-nums; }
+.log div { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.log div:last-child { border-bottom: 0; }
+.log time { font-family: var(--mono); color: var(--fg); min-width: 44px; }
+
+/* fan / drum controls */
+.controls { grid-area: controls; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .controls { grid-template-columns: 1fr; } }
+.ctl { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; min-width: 0; }
+.ctl header { display: flex; align-items: baseline; gap: 10px; }
+.ctl h2 { margin: 0; font-family: var(--display); font-size: 22px; letter-spacing: .1em; }
+.ctl.fan h2 { color: var(--fan); } .ctl.drum h2 { color: var(--drum); }
+.ctl .actual { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.dial { display: grid; grid-template-columns: var(--tap) 1fr var(--tap); gap: 8px; align-items: center; }
+.dial button { min-height: var(--tap); border-radius: 10px; border: 1px solid var(--line); background: var(--raised); font-family: var(--display); font-size: 26px; font-weight: 600; }
+.dial output { text-align: center; font-family: var(--display); font-weight: 700; font-size: 52px; font-variant-numeric: tabular-nums; line-height: 1; }
+.dial output .unit { font-size: 18px; color: var(--muted); font-weight: 500; }
+.dial output.pending { color: var(--accent); }
+.presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 6px; }
+.presets button { min-height: 52px; border-radius: 8px; border: 1px solid var(--line); background: transparent; font-family: var(--display); font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ctl.fan .presets button[aria-pressed="true"] { background: var(--fan); border-color: var(--fan); color: #0d1714; }
+.ctl.drum .presets button[aria-pressed="true"] { background: var(--drum); border-color: var(--drum); color: #140f1f; }
+.run { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.run button { min-height: 48px; border-radius: 8px; border: 1px solid var(--line); background: transparent; font-weight: 600; }
+.run button[aria-pressed="true"].on { background: var(--good); border-color: var(--good); color: #0c1a10; }
+.run button[aria-pressed="true"].off { background: var(--raised); }
+
+/* toast and sheet */
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-bottom) + 16px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 10px 14px; border-radius: 10px; display: flex; gap: 12px; align-items: center; font-weight: 500; max-width: calc(100% - 32px); }
+.toast button { min-height: 44px; padding: 0 14px; border-radius: 8px; border: 0; background: var(--accent); color: #1a1208; font-weight: 600; }
+.sheet { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 70%, transparent); display: grid; place-items: center; padding: 16px; }
+.sheet > div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; width: min(520px, 100%); display: grid; gap: 12px; }
+.sheet h2 { margin: 0; font-family: var(--display); font-size: 28px; letter-spacing: .04em; }
+.sheet label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.sheet input, .sheet select { min-height: 52px; font: inherit; font-size: 20px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); color: var(--fg); }
+.sheet .check { font-size: 14px; }
+.sheet .check.bad { color: var(--crit); } .sheet .check.ok { color: var(--good); }
+.sheet .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sheet .actions { display: flex; gap: 10px; justify-content: flex-end; }
+.sheet .actions button { min-height: 52px; padding: 0 18px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); font-weight: 600; }
+.sheet .actions button.primary { background: var(--accent); border-color: var(--accent); color: #1a1208; }
+.note { color: var(--muted); font-size: 12px; }
+</style>
+
+<div class="console">
+  <header class="top">
+    <div class="batch"><b>#161 India Natural</b><span>1400 g in · background: #158 (previous India Natural)</span></div>
+    <span class="chip" title="Simulated connection status"><span class="dot"></span>Roaster linked · 2.0 s · 0 dropouts</span>
+    <span class="chip" id="phaseChip">Drying</span>
+    <span class="chip">Heat limit 200 °C · locked</span>
+    <span class="spacer"></span>
+    <div class="sim" aria-label="Simulation">
+      <span>Simulated roast</span>
+      <button id="pause" aria-pressed="false">Pause</button>
+      <button data-speed="1" aria-pressed="true">1×</button>
+      <button data-speed="5" aria-pressed="false">5×</button>
+      <button data-speed="20" aria-pressed="false">20×</button>
+      <button id="restart">Restart</button>
+    </div>
+  </header>
+
+  <section class="chart" aria-label="Roast curves">
+    <canvas id="chart"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--bt)"></i>BT</span><span><i style="background:var(--et)"></i>ET</span>
+      <span><i style="background:var(--ror)"></i>BT rate of rise</span><span><i style="background:var(--bg-curve)"></i>#158</span>
+      <span><i style="background:var(--fan)"></i>Fan</span><span><i style="background:var(--drum)"></i>Drum</span>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="readouts">
+      <div class="read big"><small>Bean temp · time</small><b><span id="bt">--</span><span class="unit">°C</span></b><div class="sub"><span id="clock">--:--</span> since charge · <span id="vsBg">--</span></div></div>
+      <div class="read ror"><small>Rate of rise</small><b><span id="ror">--</span><span class="unit">°/min</span></b></div>
+      <div class="read et"><small>Env temp</small><b><span id="et">--</span><span class="unit">°C</span></b><div class="sub">Exhaust <span id="exh">--</span> °C</div></div>
+      <div class="read big" id="devBox"><small>Development</small><b style="color:var(--fg)"><span id="dev">--</span></b><div class="sub" id="devSub">starts at first crack</div></div>
+    </div>
+    <div class="marks">
+      <button class="mark" id="mDRY">DRY<small id="mDRYs">one tap</small></button>
+      <button class="mark drop" id="mDROP">DROP<small id="mDROPs">ends the roast</small></button>
+      <button class="mark fcs" id="mFCs">FIRST CRACK<small id="mFCss">expected near 188 °C</small></button>
+    </div>
+    <div class="more" aria-label="Rarely used marks">
+      <button data-mark="FCe">FC end</button><button data-mark="SCs">SC start</button><button data-mark="COOL">Cool end</button>
+    </div>
+    <div class="log" id="log" aria-label="Roast log"></div>
+  </aside>
+
+  <section class="controls">
+    <div class="ctl fan" id="ctlFan">
+      <header><h2>FAN</h2><span class="actual" id="fanActual"></span></header>
+      <div class="dial"><button data-step="-5" aria-label="Fan down 5">−5</button><output id="fanOut"></output><button data-step="5" aria-label="Fan up 5">+5</button></div>
+      <div class="presets"></div>
+      <div class="run"><button class="on" data-run="1">Run</button><button class="off" data-run="0">Stop</button></div>
+    </div>
+    <div class="ctl drum" id="ctlDrum">
+      <header><h2>DRUM</h2><span class="actual" id="drumActual"></span></header>
+      <div class="dial"><button data-step="-5" aria-label="Drum down 5">−5</button><output id="drumOut"></output><button data-step="5" aria-label="Drum up 5">+5</button></div>
+      <div class="presets"></div>
+      <div class="run"><button class="on" data-run="1">Run</button><button class="off" data-run="0">Stop</button></div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" hidden><span id="toastText"></span><button id="toastUndo">Undo</button></div>
+
+<div class="sheet" id="sheet" hidden>
+  <div role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">Roast #161 dropped</h2>
+    <div class="note" id="sheetSummary"></div>
+    <div class="row">
+      <label for="bean">Bean<select id="bean"><option>India Natural</option><option>El Salvador</option><option>Ethiopia Sweet Lily</option><option>Burundi</option><option>Dominican</option></select></label>
+      <label for="win">Weight in (g)<input id="win" inputmode="numeric" value="1400"></label>
+    </div>
+    <label for="wout">Weight out (g)<input id="wout" inputmode="numeric" placeholder="e.g. 1190"></label>
+    <div class="check" id="lossCheck">Enter the roasted weight. Your usual loss is 14–18 %.</div>
+    <div class="actions"><button id="sheetLater">Later</button><button class="primary" id="sheetSave">Save roast</button></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  // ---- simulated FZ94: the median of 154 logged roasts (TP 68 s at 81 °C, DRY 5:29 at 149 °C, FCs 9:00 at 188 °C)
+  const BT_K = [[0,200],[30,110],[68,81],[150,105],[329,149],[450,172],[540,188],[680,204],[800,214]];
+  const ET_K = [[0,190],[30,165],[68,160],[150,165],[329,168],[540,172],[680,175],[800,177]];
+  const BG_SHIFT = 12; // background roast #158 ran a little later
+
+  // monotone cubic interpolation (Fritsch–Carlson), so the curves and their rate of rise are smooth
+  function pchip(knots) {
+    const x = knots.map(k => k[0]), y = knots.map(k => k[1]), n = x.length;
+    const d = [], m = new Array(n);
+    for (let i = 0; i < n - 1; i++) d.push((y[i+1] - y[i]) / (x[i+1] - x[i]));
+    m[0] = d[0]; m[n-1] = d[n-2];
+    for (let i = 1; i < n - 1; i++) m[i] = d[i-1] * d[i] <= 0 ? 0 : 2 / (1/d[i-1] + 1/d[i]);
+    return t => {
+      if (t <= x[0]) return y[0];
+      if (t >= x[n-1]) return y[n-1] + d[n-2] * (t - x[n-1]);
+      let i = 0; while (t > x[i+1]) i++;
+      const h = x[i+1] - x[i], s = (t - x[i]) / h, s2 = s*s, s3 = s2*s;
+      return (2*s3 - 3*s2 + 1)*y[i] + (s3 - 2*s2 + s)*h*m[i] + (-2*s3 + 3*s2)*y[i+1] + (s3 - s2)*h*m[i+1];
+    };
+  }
+  const btCurve = pchip(BT_K), etCurve = pchip(ET_K);
+
+  const SAMPLE = 2; // seconds, as the roaster is sampled
+  const COMMIT_MS = 700; // -/+ taps within this time become one command
+  const FAN = { key: 'fan', name: 'Fan', presets: [20,30,50,60,80,120], min: 0, max: 120, color: '--fan' };
+  const DRUM = { key: 'drum', name: 'Drum', presets: [20,25,30,50], min: 0, max: 50, color: '--drum' };
+
+  let S; // simulation state
+  function reset(startAt) {
+    S = { t: -20, playing: true, speed: currentSpeed(), samples: [], events: [], marks: {}, log: [],
+      fan: { set: 30, actual: 30, run: true, pending: null, timer: null },
+      drum: { set: 50, actual: 50, run: true, pending: null, timer: null },
+      dropped: false, lastMark: null };
+    S.events.push({ t: 0, who: 'fan', v: 30, auto: true }, { t: 0, who: 'drum', v: 50, auto: true });
+    // fast-forward to a realistic working state: mid drying phase, with the usual early moves
+    const script = [[130, 'fan', 20]];
+    while (S.t < startAt) {
+      for (const [at, who, v] of script) if (S.t < at && S.t + SAMPLE >= at) setNow(who, v, at, true);
+      step(SAMPLE);
+    }
+    S.log = [];
+    addLog(0, 'CHARGE detected automatically');
+    addLog(130, 'Fan 20');
+  }
+
+  function currentSpeed() {
+    const b = document.querySelector('.sim [data-speed][aria-pressed="true"]');
+    return b ? Number(b.dataset.speed) : 1;
+  }
+
+  // physics of the simulated machine: drives ramp, more air cools ET and slows BT slightly
+  function step(dt) {
+    for (const who of ['fan', 'drum']) {
+      const d = S[who], target = d.run ? d.set : 0, rate = 30 * dt; // 30 Hz per second
+      d.actual = d.actual < target ? Math.min(target, d.actual + rate) : Math.max(target, d.actual - rate);
+    }
+    S.t += dt;
+    const t = S.t;
+    let bt, et;
+    if (t < 0) { bt = 200; et = 190; }
+    else if (!S.dropped) {
+      const air = Math.max(0, S.fan.actual - 30);
+      bt = btCurve(t) - air * 0.025; et = etCurve(t) - air * 0.08;
+    } else {
+      const since = t - S.marks.DROP;
+      bt = Math.max(60, btCurve(S.marks.DROP) - since * 2.5); et = 175 + Math.min(10, since / 6);
+    }
+    const last = S.samples[S.samples.length - 1];
+    if (!last || t - last.t >= SAMPLE - 1e-6) {
+      const back = S.samples.find(s => s.t >= t - 30);
+      const ror = back && t > 75 && !S.dropped ? (bt - back.bt) * 60 / (t - back.t) : null;
+      S.samples.push({ t, bt, et, ror, fan: S.fan.actual, drum: S.drum.actual });
+    }
+  }
+
+  // ---- controls
+  function setNow(who, v, at, silent) {
+    const d = S[who], cfg = who === 'fan' ? FAN : DRUM;
+    v = Math.max(cfg.min, Math.min(cfg.max, Math.round(v / 5) * 5));
+    d.pending = null; clearTimeout(d.timer);
+    if (v === d.set) { render(); return; }
+    d.set = v;
+    S.events.push({ t: at ?? S.t, who, v });
+    if (!silent) addLog(S.t, `${cfg.name} ${v}`);
+    render();
+  }
+  function nudge(who, delta) {
+    const d = S[who];
+    const base = d.pending ?? d.set;
+    const cfg = who === 'fan' ? FAN : DRUM;
+    d.pending = Math.max(cfg.min, Math.min(cfg.max, base + delta));
+    clearTimeout(d.timer);
+    d.timer = setTimeout(() => setNow(who, d.pending), COMMIT_MS);
+    render();
+  }
+  function setRun(who, on) {
+    S[who].run = on;
+    addLog(S.t, `${who === 'fan' ? 'Fan' : 'Drum'} ${on ? 'run' : 'stop'}`);
+    render();
+  }
+
+  function buildControl(cfg) {
+    const root = document.getElementById(cfg.key === 'fan' ? 'ctlFan' : 'ctlDrum');
+    const presets = root.querySelector('.presets');
+    for (const v of cfg.presets) {
+      const b = document.createElement('button');
+      b.textContent = v; b.dataset.value = v;
+      b.addEventListener('click', () => setNow(cfg.key, v));
+      presets.appendChild(b);
+    }
+    root.querySelectorAll('[data-step]').forEach(b => b.addEventListener('click', () => nudge(cfg.key, Number(b.dataset.step))));
+    root.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', () => setRun(cfg.key, b.dataset.run === '1')));
+  }
+
+  // ---- marks
+  function mark(name) {
+    if (S.marks[name] !== undefined || S.dropped && name !== 'COOL') return;
+    S.marks[name] = S.t;
+    S.lastMark = name;
+    addLog(S.t, `${name} at ${fmt(S.t)} · BT ${cur().bt.toFixed(1)} °C`);
+    if (name === 'DROP') { S.dropped = true; setTimeout(openSheet, 900); }
+    toast(`${name} marked at ${fmt(S.t)}`, () => { delete S.marks[name]; if (name === 'DROP') { S.dropped = false; closeSheet(); } addLog(S.t, `${name} undone`); render(); });
+    render();
+  }
+
+  let toastTimer = null;
+  function toast(text, undo) {
+    const el = document.getElementById('toast');
+    document.getElementById('toastText').textContent = text;
+    const u = document.getElementById('toastUndo');
+    u.onclick = () => { undo(); el.hidden = true; };
+    el.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+  }
+
+  function addLog(t, text) { S.log.unshift({ t, text }); }
+
+  // ---- after the roast
+  function openSheet() {
+    const s = cur(), fc = S.marks.FCs;
+    const dev = fc !== undefined ? S.marks.DROP - fc : null;
+    document.getElementById('sheetSummary').textContent =
+      `Dropped at ${fmt(S.marks.DROP)}, BT ${s.bt.toFixed(1)} °C` + (dev !== null ? ` · development ${fmt(dev)} (${(100 * dev / S.marks.DROP).toFixed(1)} %)` : ' · first crack was not marked');
+    document.getElementById('sheet').hidden = false;
+    checkLoss();
+  }
+  function closeSheet() { document.getElementById('sheet').hidden = true; }
+  function checkLoss() {
+    const win = Number(document.getElementById('win').value), wout = Number(document.getElementById('wout').value);
+    const el = document.getElementById('lossCheck');
+    if (!wout) { el.className = 'check'; el.textContent = 'Enter the roasted weight. Your usual loss is 14–18 %.'; return; }
+    const loss = 100 * (win - wout) / win;
+    const ok = loss >= 8 && loss <= 25;
+    el.className = 'check ' + (ok ? 'ok' : 'bad');
+    el.textContent = ok ? `Weight loss ${loss.toFixed(1)} %` : `Weight loss ${loss.toFixed(1)} % looks wrong (expected 8–25 %). Check the number before saving.`;
+  }
+
+  // ---- rendering
+  const fmt = s => { const a = Math.max(0, Math.round(s)); return `${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`; };
+  const cur = () => S.samples[S.samples.length - 1];
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  function render() {
+    const s = cur();
+    document.getElementById('bt').textContent = s.bt.toFixed(1);
+    document.getElementById('et').textContent = s.et.toFixed(0);
+    document.getElementById('exh').textContent = (s.et - 25).toFixed(0);
+    document.getElementById('ror').textContent = s.ror === null ? '--' : s.ror.toFixed(1);
+    document.getElementById('clock').textContent = S.t < 0 ? 'preheat' : fmt(S.dropped ? S.marks.DROP : S.t);
+    const bgBt = btCurve(Math.max(0, S.t - BG_SHIFT));
+    document.getElementById('vsBg').textContent = S.t > 0 && !S.dropped ? `${(s.bt - bgBt >= 0 ? '+' : '')}${(s.bt - bgBt).toFixed(1)} vs #158` : '';
+
+    const fc = S.marks.FCs;
+    const devEnd = S.dropped ? S.marks.DROP : S.t;
+    document.getElementById('dev').textContent = fc !== undefined ? `${fmt(devEnd - fc)} · ${(100 * (devEnd - fc) / devEnd).toFixed(1)} %` : '--';
+    document.getElementById('devSub').textContent = fc !== undefined ? `since first crack at ${fmt(fc)} · your median 2:00 · 18 %` : 'starts at first crack';
+
+    const phase = S.dropped ? 'Cooling' : fc !== undefined ? 'Development' : S.marks.DRY !== undefined ? 'Maillard' : S.t < 0 ? 'Preheat' : 'Drying';
+    document.getElementById('phaseChip').textContent = phase;
+
+    for (const [id, name, subId] of [['mDRY', 'DRY', 'mDRYs'], ['mFCs', 'FCs', 'mFCss'], ['mDROP', 'DROP', 'mDROPs']]) {
+      const b = document.getElementById(id), at = S.marks[name];
+      b.classList.toggle('done', at !== undefined);
+      b.disabled = S.t < 0 || (S.dropped && name !== 'DROP');
+      const sub = document.getElementById(subId);
+      if (sub) {
+        if (at !== undefined) sub.textContent = `${fmt(at)} · ${S.samples.find(x => x.t >= at)?.bt.toFixed(0) ?? ''} °C`;
+        else if (name === 'DRY') sub.textContent = 'one tap';
+        else if (name === 'DROP') sub.textContent = 'ends the roast';
+        else sub.textContent = s.bt >= 183 ? 'listen: crack expected now' : 'expected near 188 °C';
+      }
+    }
+    document.getElementById('mFCs').classList.toggle('cue', S.marks.FCs === undefined && !S.dropped && s.bt >= 183);
+
+    for (const cfg of [FAN, DRUM]) {
+      const d = S[cfg.key];
+      const out = document.getElementById(cfg.key + 'Out');
+      out.innerHTML = `${d.pending ?? d.set}<span class="unit"> Hz</span>`;
+      out.classList.toggle('pending', d.pending !== null);
+      document.getElementById(cfg.key + 'Actual').textContent = `drive ${d.actual.toFixed(0)} Hz` + (d.run ? '' : ' · stopped');
+      const root = document.getElementById(cfg.key === 'fan' ? 'ctlFan' : 'ctlDrum');
+      root.querySelectorAll('.presets button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.value) === (d.pending ?? d.set))));
+      root.querySelector('.run .on').setAttribute('aria-pressed', String(d.run));
+      root.querySelector('.run .off').setAttribute('aria-pressed', String(!d.run));
+    }
+
+    document.getElementById('log').innerHTML = S.log.slice(0, 30).map(e => `<div><time>${fmt(e.t)}</time><span>${e.text}</span></div>`).join('');
+    draw();
+  }
+
+  // ---- chart
+  const canvas = document.getElementById('chart');
+  function draw() {
+    const box = canvas.parentElement.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(box.width * dpr) || canvas.height !== Math.round(box.height * dpr)) {
+      canvas.width = Math.round(box.width * dpr); canvas.height = Math.round(box.height * dpr);
+    }
+    const g = canvas.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = box.width, H = box.height;
+    const pad = { l: 48, r: 44, t: 36, b: 30 };
+    const strip = 34; // fan/drum strip at the bottom of the chart
+    const tMin = -30, tMax = Math.max(15 * 60, S.t + 60);
+    const yMin = 50, yMax = 240, rMax = 30;
+    const plotB = H - pad.b - strip;
+    const X = t => pad.l + (t - tMin) / (tMax - tMin) * (W - pad.l - pad.r);
+    const Y = v => pad.t + (1 - (v - yMin) / (yMax - yMin)) * (plotB - pad.t);
+    const R = v => pad.t + (1 - v / rMax) * (plotB - pad.t);
+    g.clearRect(0, 0, W, H);
+    g.font = '12px "IBM Plex Sans", system-ui, sans-serif';
+    g.lineWidth = 1;
+
+    // grid and axes
+    g.strokeStyle = css('--line'); g.fillStyle = css('--muted');
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    for (let v = 50; v <= 240; v += 25) { g.globalAlpha = .55; g.beginPath(); g.moveTo(pad.l, Y(v)); g.lineTo(W - pad.r, Y(v)); g.stroke(); g.globalAlpha = 1; g.fillText(v, pad.l - 8, Y(v)); }
+    g.textAlign = 'left';
+    for (let v = 0; v <= rMax; v += 10) g.fillText(v, W - pad.r + 8, R(v));
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    for (let m = 0; m * 60 <= tMax; m += 1) {
+      const x = X(m * 60);
+      if (m % 2 === 0) g.fillText(m, x, plotB + strip + 8);
+      g.globalAlpha = m % 2 === 0 ? .55 : .25; g.beginPath(); g.moveTo(x, pad.t); g.lineTo(x, plotB); g.stroke(); g.globalAlpha = 1;
+    }
+    g.textAlign = 'left'; g.fillText('°C', 6, pad.t - 24); g.textAlign = 'right'; g.fillText('°/min', W - 6, pad.t - 24);
+
+    // phase bands from the marks
+    const band = (a, b, color) => { if (a === undefined) return; g.fillStyle = color; g.globalAlpha = .07; g.fillRect(X(a), pad.t, X(b ?? S.t) - X(a), plotB - pad.t); g.globalAlpha = 1; };
+    band(S.marks.FCs, S.marks.DROP, css('--accent'));
+
+    // background roast #158
+    g.setLineDash([6, 5]); g.strokeStyle = css('--bg-curve'); g.lineWidth = 2;
+    g.beginPath(); for (let t = 0; t <= 690; t += 4) { const x = X(t + BG_SHIFT), y = Y(btCurve(t)); t ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke();
+    g.setLineDash([]);
+
+    const line = (key, color, width, scale) => {
+      g.strokeStyle = color; g.lineWidth = width; g.lineJoin = 'round'; g.beginPath();
+      let started = false;
+      for (const s of S.samples) { const v = s[key]; if (v === null) { started = false; continue; } const x = X(s.t), y = scale(v); started ? g.lineTo(x, y) : g.moveTo(x, y); started = true; }
+      g.stroke();
+    };
+    line('ror', css('--ror'), 2.5, v => R(Math.max(0, Math.min(rMax, v))));
+    line('et', css('--et'), 3, Y);
+    line('bt', css('--bt'), 4.5, Y);
+
+    // marks
+    g.font = '600 14px "Barlow Condensed", sans-serif';
+    for (const [name, at] of Object.entries(S.marks)) {
+      const x = X(at); g.strokeStyle = css('--fg'); g.globalAlpha = .5; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x, pad.t); g.lineTo(x, plotB); g.stroke(); g.globalAlpha = 1;
+      g.fillStyle = css('--fg'); g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(`${name} ${fmt(at)}`, x + 4, pad.t + 2);
+    }
+    // now
+    if (!S.dropped && S.t > tMin) { const s = cur(); g.fillStyle = css('--bt'); g.beginPath(); g.arc(X(s.t), Y(s.bt), 6, 0, Math.PI * 2); g.fill(); }
+
+    // fan/drum strip: step lines of the drive speeds, labels at each change
+    const sy = plotB + 6, sh = strip - 10;
+    for (const [who, color, max] of [['fan', css('--fan'), 120], ['drum', css('--drum'), 50]]) {
+      g.strokeStyle = color; g.lineWidth = 2; g.beginPath();
+      let first = true;
+      for (const s of S.samples) { const x = X(s.t), y = sy + sh * (1 - s[who] / max); first ? g.moveTo(x, y) : g.lineTo(x, y); first = false; }
+      g.stroke();
+    }
+    g.font = '600 12px "Barlow Condensed", sans-serif'; g.textBaseline = 'bottom';
+    for (const e of S.events) {
+      if (e.auto) continue;
+      g.fillStyle = e.who === 'fan' ? css('--fan') : css('--drum');
+      g.textAlign = 'center'; g.fillText(e.v, X(e.t), sy);
+    }
+  }
+
+  // ---- loop
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.25, (now - last) / 1000); last = now;
+    if (S.playing) {
+      let remaining = dt * S.speed;
+      while (remaining > 0) { const d = Math.min(0.5, remaining); step(d); remaining -= d; }
+      if (S.t > 960) S.playing = false;
+      render();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---- wiring
+  buildControl(FAN); buildControl(DRUM);
+  document.getElementById('mDRY').addEventListener('click', () => mark('DRY'));
+  document.getElementById('mFCs').addEventListener('click', () => mark('FCs'));
+  document.getElementById('mDROP').addEventListener('click', () => mark('DROP'));
+  document.querySelectorAll('.more [data-mark]').forEach(b => b.addEventListener('click', () => mark(b.dataset.mark)));
+  document.querySelectorAll('.sim [data-speed]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.sim [data-speed]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+    S.speed = Number(b.dataset.speed);
+  }));
+  document.getElementById('pause').addEventListener('click', e => {
+    S.playing = !S.playing; e.currentTarget.textContent = S.playing ? 'Pause' : 'Play'; e.currentTarget.setAttribute('aria-pressed', String(!S.playing));
+  });
+  document.getElementById('restart').addEventListener('click', () => { closeSheet(); reset(-10); document.getElementById('pause').textContent = 'Pause'; render(); });
+  document.getElementById('wout').addEventListener('input', checkLoss);
+  document.getElementById('win').addEventListener('input', checkLoss);
+  document.getElementById('sheetLater').addEventListener('click', closeSheet);
+  document.getElementById('sheetSave').addEventListener('click', () => { closeSheet(); toast('Roast #161 saved (simulation, nothing is stored)', () => {}); });
+  window.addEventListener('resize', draw);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', draw);
+
+  reset(5 * 60 + 10); // open mid-roast, just before DRY
+  render();
+  requestAnimationFrame(frame);
+})();
+</script>

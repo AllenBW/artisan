@@ -3,7 +3,7 @@
     End-to-end test of the complete capture pipeline against the simulated FZ94 (no roaster needed).
 
 .DESCRIPTION
-    1. creates the settings profile Artisan-E2E as a copy of the installed Artisan's settings, with MODBUS pointed
+    1. creates the settings profile Artisan-E2E as a copy of the dev (else the installed) Artisan's settings, with MODBUS pointed
        at the simulator (TCP 127.0.0.1) instead of COM3, sampling every 2 s, and autosave into the test folder;
        aborts if the profile does not point at the simulator
     2. starts the FZ94 simulator (dev/fz94_sim.py)
@@ -35,7 +35,10 @@ New-Item -ItemType Directory -Force $run | Out-Null
 # 1. isolated settings profile pointing at the simulator
 $key = 'HKCU\Software\artisan-scope\Artisan-E2E'
 Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E' -Recurse -Force -ErrorAction SilentlyContinue
-reg copy 'HKCU\Software\artisan-scope\Artisan' $key /s /f | Out-Null
+# start from the dev profile (it carries the dev build's settings), else from the installed Artisan's
+$source = if (Test-Path 'HKCU:\Software\artisan-scope\Artisan-Dev') { 'Artisan-Dev' } else { 'Artisan' }
+reg copy "HKCU\Software\artisan-scope\$source" $key /s /f | Out-Null
+Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E\TouchControls' -Recurse -Force -ErrorAction SilentlyContinue # first start: display preset applied
 reg add "$key\Modbus" /v type /t REG_DWORD /d 3 /f | Out-Null
 reg add "$key\Modbus" /v host /t REG_SZ /d 127.0.0.1 /f | Out-Null
 reg add "$key\Modbus" /v port /t REG_DWORD /d $Port /f | Out-Null

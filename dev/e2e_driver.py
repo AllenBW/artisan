@@ -96,6 +96,26 @@ class Driver:
         if slider.value() != value:
             self.check(False, f'{name} reached {value} (stopped at {slider.value()})')
 
+    def panel(self, name: str) -> QWidget:
+        from PyQt6.QtWidgets import QPushButton
+        w = self.aw.findChild(QPushButton, name)
+        if w is None:
+            raise LookupError(name)
+        return w
+
+    # taps panel buttons in a quick sequence (as a person would) and states the MODBUS writes that must follow
+    def panel_taps(self, names: list[str], slider: str, value: int, writes: list[tuple[int, int, int]], within: float = 3.0,
+            exactly: int | None = None, gap: float = 0.15) -> None:
+        start = time.time()
+        for i, name in enumerate(names):
+            if i:
+                QApplication.processEvents()
+                time.sleep(gap)
+            self.tap(self.panel(name), name)
+        self.record('set', target=slider, value=value)
+        for slave, register, v in writes:
+            self.record('expect_write', slave=slave, register=register, value=v, after=round(start, 3), within=within, exactly=exactly)
+
     def extra_button(self, label: str) -> QWidget:
         for b in self.aw.buttonlist:
             if b.text().replace('\n', ' ') == label:
@@ -189,10 +209,15 @@ class Driver:
             ('fan 20', once(lambda: self.drag(aw.slider1, 'fan slider', 20))),
             ('to DRY', until_roast(DRY_AT)),
             ('DRY', once(lambda: self.tap(aw.buttonDRY, 'DRY'))),
-            ('fan 120', once(lambda: self.drag(aw.slider1, 'fan slider', 120))),
+            ('after DRY', wait(1)), # a person looks at the screen before the next action
+            ('panel fan 120', once(lambda: self.panel_taps(['touch_fan_preset_120'], 'fan slider', 120, [(23, 8193, 1200)]))),
             ('heat 190', once(lambda: self.drag(aw.slider4, 'heat slider', 190, touch=False))),
+            ('panel drum 25', once(lambda: self.panel_taps(['touch_drum_preset_25'], 'drum slider', 25, [(22, 8193, 250)]))),
             ('to mid', until_roast(450)),
-            ('fan 60', once(lambda: self.drag(aw.slider1, 'fan slider', 60))),
+            # four quick -5 taps: one command (1000) after the taps stop, not four
+            ('panel fan -20', once(lambda: self.panel_taps(['touch_fan_minus'] * 4, 'fan slider', 100, [(23, 8193, 1000)], exactly=1))),
+            ('panel settle', wait(2)),
+            ('panel drum +5', once(lambda: self.panel_taps(['touch_drum_plus'], 'drum slider', 30, [(22, 8193, 300)], exactly=1))),
             ('to FCs', until_roast(FCS_AT)),
             ('FCs', once(lambda: self.tap(aw.buttonFCs, 'FCs'))),
             ('fan 120 again', once(lambda: self.drag(aw.slider1, 'fan slider', 120))),
@@ -201,6 +226,7 @@ class Driver:
             ('wait drop', ensure_drop),
             ('cooling', wait(6)),
             ('dialogs', once(dismiss_dialogs)),
+            ('panel drum stop', once(lambda: self.panel_taps(['touch_drum_off'], 'drum slider', 30, [(22, 8192, 1)]))),
             ('drum off', once(lambda: self.tap(self.extra_button('Drum Off'), 'Drum Off'))),
             ('fan off', once(lambda: self.tap(self.extra_button('Fan Off'), 'Fan Off', touch=False))),
             ('settle off', wait(3)),

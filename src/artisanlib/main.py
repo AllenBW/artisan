@@ -28145,6 +28145,10 @@ def main() -> None:
 
     appWindow.set_ui_mode(appWindow.ui_mode, False)
 
+    # touch control panel, bottom safe margin and display preset (after the settings are loaded and the menus created)
+    from artisanlib import touch_controls
+    touch_controls.install(appWindow)
+
     # inform the user the debug logging is on
     if debugLogLevelActive():
         appWindow.sendmessage(QApplication.translate('Message', 'debug logging ON'))
