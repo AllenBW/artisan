@@ -28111,6 +28111,10 @@ def main() -> None:
 
     app.setActivationWindow(appWindow,activateOnMessage=False) # set the activation window for the QtSingleApplication
 
+    # optional interaction log (ARTISAN_INTERACTION_LOG=1) to analyze the roasting workflow
+    from artisanlib import interaction_log
+    interaction_log.install(appWindow)
+
 
     # only here deactivating the app napping seems to have an effect (after GUI has been initialized)
     if sys.platform.startswith('darwin'):

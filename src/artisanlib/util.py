@@ -57,8 +57,12 @@ if TYPE_CHECKING:
 _log: Final[logging.Logger] = logging.getLogger(__name__)
 
 # don't update any of those as they are used to find the app settings
-application_name: Final[str] = 'Artisan'
-application_viewer_name: Final[str] = 'ArtisanViewer'
+# setting the environment variable ARTISAN_SETTINGS_PROFILE (eg. to 'Dev') keeps settings, logs and data
+# of a development build apart from those of the installed app (eg. 'Artisan-Dev' instead of 'Artisan')
+application_settings_profile: Final[str] = os.environ.get('ARTISAN_SETTINGS_PROFILE', '').strip()
+application_base_name: Final[str] = 'Artisan' # used to locate bundled resources, independent of the settings profile
+application_name: Final[str] = f'{application_base_name}-{application_settings_profile}' if application_settings_profile else application_base_name
+application_viewer_name: Final[str] = f'ArtisanViewer-{application_settings_profile}' if application_settings_profile else 'ArtisanViewer'
 application_organization_name: Final[str] = 'artisan-scope'
 application_organization_domain: Final[str] = 'artisan-scope.org'
 application_desktop_file_name: Final[str] = 'org.artisan_scope.artisan'

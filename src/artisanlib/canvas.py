@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 
 from artisanlib.util import (to_ascii, uchr, fill_gaps, deltaLabelPrefix, deltaLabelUTF8, deltaLabelMathPrefix, stringfromseconds,
         fromFtoC, fromFtoCstrict, fromCtoF, fromCtoFstrict, RoRfromFtoC, RoRfromFtoCstrict, RoRfromCtoF, RoRfromCtoFstrict, toInt, toString,
-        toFloat, application_name, getResourcePath, getDirectory, convertWeight, right_to_left, float2str,
+        toFloat, application_base_name, getResourcePath, getDirectory, convertWeight, right_to_left, float2str,
         abbrevString, scaleFloat2String, is_proper_temp, weight_units, render_weight, volume_units, float2float, timearray2index,
         events_internal_to_external_value, events_external_to_internal_value, smooth_list, computeDeltas)
 from artisanlib import pid
@@ -12331,7 +12331,7 @@ class tgraphcanvas(QObject):
         #load selected dictionary
         if color == 1:
             self.aw.sendmessage(QApplication.translate('Message','Colors set to defaults'))
-            fname = os.path.join(getResourcePath(), 'Themes', application_name, 'Default.athm')
+            fname = os.path.join(getResourcePath(), 'Themes', application_base_name, 'Default.athm')
             if os.path.isfile(fname) and not self.flagon:
                 self.aw.loadSettings_theme(fn=fname,remember=False,reset=False)
                 self.aw.sendmessage(QApplication.translate('Message','Colors set to Default Theme'))
