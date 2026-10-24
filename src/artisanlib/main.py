@@ -209,7 +209,7 @@ from artisanlib.util import (appFrozen, uchr, decodeLocal, decodeLocalStrict, en
         deltaLabelPrefix, deltaLabelUTF8, deltaLabelBigPrefix, stringfromseconds, stringtoseconds,
         fromFtoCstrict, fromCtoFstrict, RoRfromFtoCstrict, RoRfromCtoFstrict,
         convertRoR, convertRoRstrict, convertTemp, path2url, toInt, toString, toList, toFloat,
-        toBool, toStringList, removeAll, application_name, application_viewer_name, application_organization_name,
+        toBool, toStringList, removeAll, application_name, application_viewer_name, application_organization_name, application_settings_profile,
         application_organization_domain, application_desktop_file_name, getDataDirectory, getDocumentsDirectory, getAppPath, getResourcePath, debugLogLevelToggle,
         debugLogLevelActive, setDebugLogLevel, createGradient, natsort, setDeviceDebugLogLevel,
         comma2dot, is_proper_temp, weight_units, weight_units_lower, volume_units, float2float, float2str,
@@ -233,8 +233,9 @@ if sys.platform.startswith('darwin'):
 #light_blue: Final[str] = '#4c97c3' # buttons CONTROL & RESET (was #2298c7)
 #dark_blue: Final[str] = '#3979ae' # buttons ON & START (was #147bb3)
 
-appGuid:Final[str] = '9068bd2fa8e54945a6be1f1a0a589e92'
-viewerAppGuid:Final[str] = '9068bd2fa8e54945a6be1f1a0a589e93'
+# instances with a settings profile (ARTISAN_SETTINGS_PROFILE) form their own single-instance group
+appGuid:Final[str] = '9068bd2fa8e54945a6be1f1a0a589e92' + (f'-{application_settings_profile}' if application_settings_profile else '')
+viewerAppGuid:Final[str] = '9068bd2fa8e54945a6be1f1a0a589e93' + (f'-{application_settings_profile}' if application_settings_profile else '')
 
 class Artisan(QtSingleApplication):
 

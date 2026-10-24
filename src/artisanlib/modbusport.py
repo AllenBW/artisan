@@ -47,6 +47,7 @@ from PyQt6.QtWidgets import QApplication
 
 from artisanlib.util import debugLogLevelActive, max_blocks, min_blocks
 from artisanlib.async_comm import AsyncLoopThread
+from artisanlib import modbus_trace
 
 
 _log: Final[logging.Logger] = logging.getLogger(__name__)
@@ -308,9 +309,14 @@ class modbusport:
         if not self.isConnected():
             self.commError = 0
             try:
+                # optional wire-level trace of all frames (ARTISAN_MODBUS_TRACE=1); empty if disabled
+                trace = modbus_trace.client_kwargs({0: 'rtu', 3: 'tcp', 4: 'tcp'}.get(self.type, 'raw'), {'type': self.type, 'comport': self.comport, 'baudrate': self.baudrate,
+                    'bytesize': self.bytesize, 'parity': self.parity, 'stopbits': self.stopbits, 'timeout': self.timeout,
+                    'host': self.host, 'port': self.port, 'delay_ms': self.aw.qmc.delay})
                 # as in the following the port is None, no port is opened on creation of the (py)serial object
                 if self.type == 1: # Serial ASCII
                     self._client = AsyncModbusSerialClient(
+                        **trace,
                         framer=FramerType.ASCII,
                         port=self.comport,
                         baudrate=self.baudrate,
@@ -326,6 +332,7 @@ class modbusport:
                     pass # serial binary is no longer supported by pymodbus 3.7
                 elif self.type == 3: # TCP
                     self._client = AsyncModbusTcpClient(
+                            **trace,
                             host=self.host,
                             port=self.port,
                             retries=self.IP_retries,                # number of send retries
@@ -338,6 +345,7 @@ class modbusport:
 #                    self.readRetries = self.IP_retries # retire Artisan-level retries
                 elif self.type == 4: # UDP
                     self._client = AsyncModbusUdpClient(
+                        **trace,
                         host=self.host,
                         port=self.port,
                         retries=0,                # number of send retries (if set to n>0 each requests is sent n-types on MODBUS UDP!)
@@ -350,6 +358,7 @@ class modbusport:
 #                    self.readRetries = self.IP_retries # retire Artisan-level retries
                 else: # Serial RTU
                     self._client = AsyncModbusSerialClient(
+                        **trace,
                         framer=FramerType.RTU,
                         port=self.comport,
                         baudrate=self.baudrate,
