@@ -3,12 +3,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
 <style>
-/* Layout: instrument console. Chart left, readouts and marks right, fan/drum controls under the chart; nothing in the bottom 48 px. */
+/* Layout: instrument console. Chart left with curve toggles, time/temps/phases and phase buttons right, fan/drum under the chart; nothing in the bottom 48 px. */
 :root {
   --bg: #14110f; --surface: #1e1a17; --raised: #29231f; --line: #3b332d;
   --fg: #f1e9df; --muted: #a3968a;
-  --bt: #ff6b3d; --et: #6fb7ff; --ror: #f5c451; --bg-curve: #8a7a6c;
+  --bt: #ff6b3d; --et: #6fb7ff; --ror: #f5c451; --etror: #9fd3ff; --exh: #d98fb3; --limit: #e05a5a; --bg-curve: #8a7a6c;
   --fan: #48c9b0; --drum: #b49cf0; --accent: #e9a23b;
+  --ph1: #6fbf8a; --ph2: #e2b34a; --ph3: #d0835a; /* drying, Maillard, development */
   --good: #5ec27a; --warn: #f2c14e; --crit: #ef5b5b;
   --display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
   --body: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
@@ -20,24 +21,26 @@
 @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
   --bg: #eceeea; --surface: #ffffff; --raised: #f3f4f1; --line: #d3d6cf;
   --fg: #1d1b19; --muted: #6b665f; --bg-curve: #a59a8f;
-  --bt: #e04e1f; --et: #2c7fd6; --ror: #b8860b; --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00;
+  --bt: #e04e1f; --et: #2c7fd6; --ror: #b8860b; --etror: #5aa3e0; --exh: #b0507e; --limit: #c43c3c;
+  --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00; --ph1: #3f9a5f; --ph2: #b88a12; --ph3: #b0603a;
   color-scheme: light } }
 :root[data-theme="light"] {
   --bg: #eceeea; --surface: #ffffff; --raised: #f3f4f1; --line: #d3d6cf;
   --fg: #1d1b19; --muted: #6b665f; --bg-curve: #a59a8f;
-  --bt: #e04e1f; --et: #2c7fd6; --ror: #b8860b; --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00;
+  --bt: #e04e1f; --et: #2c7fd6; --ror: #b8860b; --etror: #5aa3e0; --exh: #b0507e; --limit: #c43c3c;
+  --fan: #11917d; --drum: #7a5bd6; --accent: #b86e00; --ph1: #3f9a5f; --ph2: #b88a12; --ph3: #b0603a;
   color-scheme: light }
 
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; }
 .console { box-sizing: border-box; min-height: 100%; display: grid; gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-  grid-template-rows: auto minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-rows: auto minmax(360px, 1fr) auto;
   grid-template-areas: "top top" "chart side" "controls side";
   padding-block: 12px var(--safe-bottom);
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 @media (max-width: 900px) {
-  .console { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "side" "chart" "controls"; grid-template-rows: auto auto 360px auto; }
+  .console { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "side" "chart" "controls"; grid-template-rows: auto auto 420px auto; }
 }
 button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
 button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -50,42 +53,63 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
 .spacer { flex: 1; }
-.sim { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+.sim { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
 .sim button { min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
 .sim button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
 /* chart */
-.chart { grid-area: chart; position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; min-height: 0; }
-.chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.legend { position: absolute; top: 10px; left: 56px; display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); pointer-events: none; }
-.legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.chart { grid-area: chart; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; min-height: 0; }
+.curves { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; }
+.curves button { min-height: 40px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: transparent; font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
+.curves button i { width: 18px; height: 4px; border-radius: 2px; background: var(--c); }
+.curves button.dash i { background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 9px); }
+.curves button[aria-pressed="true"] { color: var(--fg); border-color: color-mix(in srgb, var(--c) 60%, var(--line)); background: color-mix(in srgb, var(--c) 10%, transparent); }
+.plot { position: relative; min-height: 0; }
+.plot canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-/* side: readouts and marks */
-.side { grid-area: side; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* side: time, temperatures, phases, phase buttons */
+.side { grid-area: side; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.read { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+.read { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px 8px; min-width: 0; }
 .read small { display: block; font-family: var(--display); font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-.read b { display: block; font-family: var(--display); font-weight: 600; font-variant-numeric: tabular-nums; font-size: 44px; line-height: 1.05; }
-.read.big { grid-column: span 2; }
-.read.big b { font-size: 76px; color: var(--bt); }
+.read b { display: block; font-family: var(--display); font-weight: 600; font-variant-numeric: tabular-nums; font-size: 40px; line-height: 1.05; white-space: nowrap; }
 .read .unit { font-size: .45em; color: var(--muted); margin-left: 2px; }
-.read.ror b { color: var(--ror); }
-.read.et b { color: var(--et); font-size: 34px; }
-.read .sub { font-size: 13px; color: var(--muted); }
+.read .sub { font-size: 12px; color: var(--muted); }
+.read.time { grid-column: span 2; display: flex; align-items: baseline; gap: 14px; }
+.read.time b { font-size: 64px; }
+.read.time .sub { margin-left: auto; text-align: right; }
+.read.bt b { color: var(--bt); font-size: 56px; }
+.read.ror b { color: var(--ror); font-size: 56px; }
+.read.et b { color: var(--et); }
+.read.exh b { color: var(--exh); }
+
+.phases { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 10px; display: grid; gap: 6px; }
+.phases > small { font-family: var(--display); font-size: 14px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.phasebar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--raised); }
+.phasebar span { display: block; height: 100%; transition: width .3s; }
+.phasebar .p1 { background: var(--ph1); } .phasebar .p2 { background: var(--ph2); } .phasebar .p3 { background: var(--ph3); }
+.phaserows { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.phase { border-left: 4px solid var(--c); padding-left: 8px; min-width: 0; }
+.phase.now { background: color-mix(in srgb, var(--c) 12%, transparent); border-radius: 0 6px 6px 0; }
+.phase em { display: block; font-style: normal; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.phase b { display: block; font-family: var(--display); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.phase .pct { font-size: 15px; color: var(--muted); font-weight: 500; }
+.phase .target { font-size: 11px; color: var(--muted); }
 
 .marks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.mark { min-height: var(--tap); border-radius: 10px; border: 1px solid var(--line); background: var(--raised); font-family: var(--display); font-weight: 600; font-size: 24px; letter-spacing: .04em; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; }
-.mark small { font-family: var(--body); font-weight: 400; font-size: 12px; letter-spacing: 0; color: var(--muted); }
-.mark.fcs { grid-column: span 2; min-height: 96px; font-size: 34px; border-color: var(--accent); }
-.mark.cue { animation: cue 1.4s ease-in-out infinite; background: color-mix(in srgb, var(--accent) 22%, var(--raised)); }
-.mark.done { border-color: var(--good); color: var(--good); }
-.mark.drop { border-color: var(--crit); }
+.mark { min-height: var(--tap); border-radius: 10px; border: 1px solid var(--line); border-top: 6px solid var(--c); background: var(--raised); font-family: var(--display); font-weight: 600; font-size: 24px; letter-spacing: .04em; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; padding: 4px 6px; }
+.mark small { font-family: var(--body); font-weight: 500; font-size: 12px; letter-spacing: 0; color: var(--muted); }
+.mark small.next { color: var(--c); }
+.mark.fcs { grid-column: span 2; min-height: 92px; font-size: 32px; }
+.mark.cue { animation: cue 1.4s ease-in-out infinite; background: color-mix(in srgb, var(--c) 22%, var(--raised)); }
+.mark.done { border-color: var(--good); border-top-color: var(--c); }
+.mark.done small.at { color: var(--good); }
 .mark:disabled { opacity: .4; cursor: default; }
-@keyframes cue { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 35%, transparent); } }
+@keyframes cue { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--c) 35%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .mark.cue { animation: none; } }
 .more { display: flex; gap: 6px; flex-wrap: wrap; }
 .more button { min-height: 44px; flex: 1; border-radius: 8px; border: 1px dashed var(--line); background: transparent; color: var(--muted); font-size: 13px; }
-.log { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; color: var(--muted); max-height: 150px; overflow: auto; font-variant-numeric: tabular-nums; }
+.log { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px; font-size: 13px; color: var(--muted); max-height: 120px; overflow: auto; font-variant-numeric: tabular-nums; }
 .log div { display: flex; gap: 10px; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .log div:last-child { border-bottom: 0; }
 .log time { font-family: var(--mono); color: var(--fg); min-width: 44px; }
@@ -133,7 +157,6 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   <header class="top">
     <div class="batch"><b>#161 India Natural</b><span>1400 g in · background: #158 (previous India Natural)</span></div>
     <span class="chip" title="Simulated connection status"><span class="dot"></span>Roaster linked · 2.0 s · 0 dropouts</span>
-    <span class="chip" id="phaseChip">Drying</span>
     <span class="chip">Heat limit 200 °C · locked</span>
     <span class="spacer"></span>
     <div class="sim" aria-label="Simulation">
@@ -147,25 +170,33 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   </header>
 
   <section class="chart" aria-label="Roast curves">
-    <canvas id="chart"></canvas>
-    <div class="legend">
-      <span><i style="background:var(--bt)"></i>BT</span><span><i style="background:var(--et)"></i>ET</span>
-      <span><i style="background:var(--ror)"></i>BT rate of rise</span><span><i style="background:var(--bg-curve)"></i>#158</span>
-      <span><i style="background:var(--fan)"></i>Fan</span><span><i style="background:var(--drum)"></i>Drum</span>
-    </div>
+    <div class="curves" id="curves" aria-label="Show or hide curves"></div>
+    <div class="plot"><canvas id="chart"></canvas></div>
   </section>
 
   <aside class="side">
     <div class="readouts">
-      <div class="read big"><small>Bean temp · time</small><b><span id="bt">--</span><span class="unit">°C</span></b><div class="sub"><span id="clock">--:--</span> since charge · <span id="vsBg">--</span></div></div>
-      <div class="read ror"><small>Rate of rise</small><b><span id="ror">--</span><span class="unit">°/min</span></b></div>
-      <div class="read et"><small>Env temp</small><b><span id="et">--</span><span class="unit">°C</span></b><div class="sub">Exhaust <span id="exh">--</span> °C</div></div>
-      <div class="read big" id="devBox"><small>Development</small><b style="color:var(--fg)"><span id="dev">--</span></b><div class="sub" id="devSub">starts at first crack</div></div>
+      <div class="read time"><div><small>Roast time</small><b id="clock">--:--</b></div><div class="sub"><span id="phaseNow">Drying</span><br><span id="vsBg"></span></div></div>
+      <div class="read bt"><small>Bean temp</small><b><span id="bt">--</span><span class="unit">°C</span></b></div>
+      <div class="read ror"><small>BT rate of rise</small><b><span id="ror">--</span><span class="unit">°/min</span></b></div>
+      <div class="read et"><small>Env temp</small><b><span id="et">--</span><span class="unit">°C</span></b><div class="sub">rate of rise <span id="etror">--</span> °/min</div></div>
+      <div class="read exh"><small>Exhaust</small><b><span id="exh">--</span><span class="unit">°C</span></b><div class="sub">heat limit 200 °C</div></div>
     </div>
-    <div class="marks">
-      <button class="mark" id="mDRY">DRY<small id="mDRYs">one tap</small></button>
-      <button class="mark drop" id="mDROP">DROP<small id="mDROPs">ends the roast</small></button>
-      <button class="mark fcs" id="mFCs">FIRST CRACK<small id="mFCss">expected near 188 °C</small></button>
+
+    <div class="phases" aria-label="Phase times">
+      <small>Phases</small>
+      <div class="phasebar"><span class="p1" id="pb1"></span><span class="p2" id="pb2"></span><span class="p3" id="pb3"></span></div>
+      <div class="phaserows">
+        <div class="phase" id="ph1" style="--c: var(--ph1)"><em>Drying</em><b><span id="pt1">--</span> <span class="pct" id="pp1"></span></b><span class="target">median 5:29 · 48 %</span></div>
+        <div class="phase" id="ph2" style="--c: var(--ph2)"><em>Maillard</em><b><span id="pt2">--</span> <span class="pct" id="pp2"></span></b><span class="target">median 3:31 · 31 %</span></div>
+        <div class="phase" id="ph3" style="--c: var(--ph3)"><em>Development</em><b><span id="pt3">--</span> <span class="pct" id="pp3"></span></b><span class="target">median 2:00 · 18 %</span></div>
+      </div>
+    </div>
+
+    <div class="marks" aria-label="Phase marks">
+      <button class="mark" id="mDRY" style="--c: var(--ph2)">DRY END<small class="next">starts Maillard</small><small class="at" id="mDRYs"></small></button>
+      <button class="mark" id="mDROP" style="--c: var(--crit)">DROP<small class="next">ends the roast</small><small class="at" id="mDROPs"></small></button>
+      <button class="mark fcs" id="mFCs" style="--c: var(--ph3)">FIRST CRACK<small class="next">starts Development</small><small class="at" id="mFCss">expected near 188 °C</small></button>
     </div>
     <div class="more" aria-label="Rarely used marks">
       <button data-mark="FCe">FC end</button><button data-mark="SCs">SC start</button><button data-mark="COOL">Cool end</button>
@@ -212,6 +243,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   const BT_K = [[0,200],[30,110],[68,81],[150,105],[329,149],[450,172],[540,188],[680,204],[800,214]];
   const ET_K = [[0,190],[30,165],[68,160],[150,165],[329,168],[540,172],[680,175],[800,177]];
   const BG_SHIFT = 12; // background roast #158 ran a little later
+  const HEAT_LIMIT = 200;
 
   // monotone cubic interpolation (Fritsch–Carlson), so the curves and their rate of rise are smooth
   function pchip(knots) {
@@ -232,15 +264,29 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 
   const SAMPLE = 2; // seconds, as the roaster is sampled
   const COMMIT_MS = 700; // -/+ taps within this time become one command
-  const FAN = { key: 'fan', name: 'Fan', presets: [20,30,50,60,80,120], min: 0, max: 120, color: '--fan' };
-  const DRUM = { key: 'drum', name: 'Drum', presets: [20,25,30,50], min: 0, max: 50, color: '--drum' };
+  const FAN = { key: 'fan', name: 'Fan', presets: [20,30,50,60,80,120], min: 0, max: 120 };
+  const DRUM = { key: 'drum', name: 'Drum', presets: [20,25,30,50], min: 0, max: 50 };
+
+  // curves that can be shown or hidden
+  const CURVES = [
+    { key: 'bt', label: 'BT', color: '--bt', on: true },
+    { key: 'et', label: 'ET', color: '--et', on: true },
+    { key: 'exh', label: 'Exhaust', color: '--exh', on: true },
+    { key: 'ror', label: 'BT rate of rise', color: '--ror', on: true },
+    { key: 'etror', label: 'ET rate of rise', color: '--etror', on: false },
+    { key: 'limit', label: 'Heat limit', color: '--limit', on: true, dash: true },
+    { key: 'bgbt', label: '#158 BT', color: '--bg-curve', on: true, dash: true },
+    { key: 'bget', label: '#158 ET', color: '--bg-curve', on: false, dash: true },
+    { key: 'drives', label: 'Fan & drum', color: '--fan', on: true },
+  ];
+  const shown = Object.fromEntries(CURVES.map(c => [c.key, c.on]));
 
   let S; // simulation state
   function reset(startAt) {
     S = { t: -20, playing: true, speed: currentSpeed(), samples: [], events: [], marks: {}, log: [],
       fan: { set: 30, actual: 30, run: true, pending: null, timer: null },
       drum: { set: 50, actual: 50, run: true, pending: null, timer: null },
-      dropped: false, lastMark: null };
+      dropped: false };
     S.events.push({ t: 0, who: 'fan', v: 30, auto: true }, { t: 0, who: 'drum', v: 50, auto: true });
     // fast-forward to a realistic working state: mid drying phase, with the usual early moves
     const script = [[130, 'fan', 20]];
@@ -270,16 +316,19 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     if (t < 0) { bt = 200; et = 190; }
     else if (!S.dropped) {
       const air = Math.max(0, S.fan.actual - 30);
-      bt = btCurve(t) - air * 0.025; et = etCurve(t) - air * 0.08;
+      bt = btCurve(t) - air * 0.025; et = Math.min(HEAT_LIMIT, etCurve(t) - air * 0.08);
     } else {
       const since = t - S.marks.DROP;
       bt = Math.max(60, btCurve(S.marks.DROP) - since * 2.5); et = 175 + Math.min(10, since / 6);
     }
+    const exh = et - 25 + 3 * Math.sin(t / 40);
     const last = S.samples[S.samples.length - 1];
     if (!last || t - last.t >= SAMPLE - 1e-6) {
       const back = S.samples.find(s => s.t >= t - 30);
-      const ror = back && t > 75 && !S.dropped ? (bt - back.bt) * 60 / (t - back.t) : null;
-      S.samples.push({ t, bt, et, ror, fan: S.fan.actual, drum: S.drum.actual });
+      const live = back && t > 75 && !S.dropped;
+      const ror = live ? (bt - back.bt) * 60 / (t - back.t) : null;
+      const etror = live ? (et - back.et) * 60 / (t - back.t) : null;
+      S.samples.push({ t, bt, et, exh, ror, etror, fan: S.fan.actual, drum: S.drum.actual });
     }
   }
 
@@ -288,17 +337,14 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     const d = S[who], cfg = who === 'fan' ? FAN : DRUM;
     v = Math.max(cfg.min, Math.min(cfg.max, Math.round(v / 5) * 5));
     d.pending = null; clearTimeout(d.timer);
-    if (v === d.set) { render(); return; }
+    if (v === d.set) { if (!silent) render(); return; }
     d.set = v;
     S.events.push({ t: at ?? S.t, who, v });
-    if (!silent) addLog(S.t, `${cfg.name} ${v}`);
-    render();
+    if (!silent) { addLog(S.t, `${cfg.name} ${v}`); render(); }
   }
   function nudge(who, delta) {
-    const d = S[who];
-    const base = d.pending ?? d.set;
-    const cfg = who === 'fan' ? FAN : DRUM;
-    d.pending = Math.max(cfg.min, Math.min(cfg.max, base + delta));
+    const d = S[who], cfg = who === 'fan' ? FAN : DRUM;
+    d.pending = Math.max(cfg.min, Math.min(cfg.max, (d.pending ?? d.set) + delta));
     clearTimeout(d.timer);
     d.timer = setTimeout(() => setNow(who, d.pending), COMMIT_MS);
     render();
@@ -322,14 +368,31 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     root.querySelectorAll('[data-run]').forEach(b => b.addEventListener('click', () => setRun(cfg.key, b.dataset.run === '1')));
   }
 
-  // ---- marks
+  function buildCurveToggles() {
+    const root = document.getElementById('curves');
+    for (const c of CURVES) {
+      const b = document.createElement('button');
+      b.style.setProperty('--c', `var(${c.color})`);
+      if (c.dash) b.classList.add('dash');
+      b.innerHTML = `<i></i>${c.label}`;
+      b.setAttribute('aria-pressed', String(shown[c.key]));
+      b.addEventListener('click', () => { shown[c.key] = !shown[c.key]; b.setAttribute('aria-pressed', String(shown[c.key])); draw(); });
+      root.appendChild(b);
+    }
+  }
+
+  // ---- phase marks
+  const MARK_NAMES = { DRY: 'DRY END', FCs: 'FIRST CRACK', DROP: 'DROP', FCe: 'FC END', SCs: 'SC START', COOL: 'COOL END' };
   function mark(name) {
-    if (S.marks[name] !== undefined || S.dropped && name !== 'COOL') return;
+    if (S.marks[name] !== undefined || (S.dropped && name !== 'COOL')) return;
     S.marks[name] = S.t;
-    S.lastMark = name;
-    addLog(S.t, `${name} at ${fmt(S.t)} · BT ${cur().bt.toFixed(1)} °C`);
+    addLog(S.t, `${MARK_NAMES[name]} at ${fmt(S.t)} · BT ${cur().bt.toFixed(1)} °C`);
     if (name === 'DROP') { S.dropped = true; setTimeout(openSheet, 900); }
-    toast(`${name} marked at ${fmt(S.t)}`, () => { delete S.marks[name]; if (name === 'DROP') { S.dropped = false; closeSheet(); } addLog(S.t, `${name} undone`); render(); });
+    toast(`${MARK_NAMES[name]} marked at ${fmt(S.t)}`, () => {
+      delete S.marks[name];
+      if (name === 'DROP') { S.dropped = false; closeSheet(); }
+      addLog(S.t, `${MARK_NAMES[name]} undone`); render();
+    });
     render();
   }
 
@@ -338,7 +401,8 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     const el = document.getElementById('toast');
     document.getElementById('toastText').textContent = text;
     const u = document.getElementById('toastUndo');
-    u.onclick = () => { undo(); el.hidden = true; };
+    u.hidden = !undo;
+    u.onclick = () => { if (undo) undo(); el.hidden = true; };
     el.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
   }
@@ -369,36 +433,48 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   const fmt = s => { const a = Math.max(0, Math.round(s)); return `${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`; };
   const cur = () => S.samples[S.samples.length - 1];
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const setText = (id, text) => { document.getElementById(id).textContent = text; };
+
+  // phase boundaries: drying CHARGE..DRY END, Maillard DRY END..FIRST CRACK, development FIRST CRACK..DROP
+  function phaseTimes() {
+    const end = S.dropped ? S.marks.DROP : Math.max(0, S.t);
+    const dry = S.marks.DRY, fc = S.marks.FCs;
+    const p1 = dry ?? end;
+    const p2 = dry === undefined ? 0 : (fc ?? end) - dry;
+    const p3 = fc === undefined ? 0 : end - fc;
+    const now = S.dropped ? -1 : fc !== undefined ? 3 : dry !== undefined ? 2 : 1;
+    return { p: [p1, p2, p3], total: end, now };
+  }
 
   function render() {
     const s = cur();
-    document.getElementById('bt').textContent = s.bt.toFixed(1);
-    document.getElementById('et').textContent = s.et.toFixed(0);
-    document.getElementById('exh').textContent = (s.et - 25).toFixed(0);
-    document.getElementById('ror').textContent = s.ror === null ? '--' : s.ror.toFixed(1);
-    document.getElementById('clock').textContent = S.t < 0 ? 'preheat' : fmt(S.dropped ? S.marks.DROP : S.t);
+    setText('bt', s.bt.toFixed(1));
+    setText('et', s.et.toFixed(0));
+    setText('exh', s.exh.toFixed(0));
+    setText('ror', s.ror === null ? '--' : s.ror.toFixed(1));
+    setText('etror', s.etror === null ? '--' : s.etror.toFixed(1));
+    setText('clock', S.t < 0 ? 'preheat' : fmt(S.dropped ? S.marks.DROP : S.t));
     const bgBt = btCurve(Math.max(0, S.t - BG_SHIFT));
-    document.getElementById('vsBg').textContent = S.t > 0 && !S.dropped ? `${(s.bt - bgBt >= 0 ? '+' : '')}${(s.bt - bgBt).toFixed(1)} vs #158` : '';
+    setText('vsBg', S.t > 0 && !S.dropped ? `BT ${(s.bt - bgBt >= 0 ? '+' : '')}${(s.bt - bgBt).toFixed(1)} vs #158` : '');
 
-    const fc = S.marks.FCs;
-    const devEnd = S.dropped ? S.marks.DROP : S.t;
-    document.getElementById('dev').textContent = fc !== undefined ? `${fmt(devEnd - fc)} · ${(100 * (devEnd - fc) / devEnd).toFixed(1)} %` : '--';
-    document.getElementById('devSub').textContent = fc !== undefined ? `since first crack at ${fmt(fc)} · your median 2:00 · 18 %` : 'starts at first crack';
-
-    const phase = S.dropped ? 'Cooling' : fc !== undefined ? 'Development' : S.marks.DRY !== undefined ? 'Maillard' : S.t < 0 ? 'Preheat' : 'Drying';
-    document.getElementById('phaseChip').textContent = phase;
+    const ph = phaseTimes();
+    setText('phaseNow', S.dropped ? 'Cooling' : S.t < 0 ? 'Preheat' : ['', 'Drying', 'Maillard', 'Development'][ph.now]);
+    for (let i = 0; i < 3; i++) {
+      const started = i === 0 ? S.t > 0 : i === 1 ? S.marks.DRY !== undefined : S.marks.FCs !== undefined;
+      setText(`pt${i+1}`, started ? fmt(ph.p[i]) : '--');
+      setText(`pp${i+1}`, started && ph.total > 0 ? `${Math.round(100 * ph.p[i] / ph.total)} %` : '');
+      document.getElementById(`pb${i+1}`).style.width = ph.total > 0 ? `${100 * ph.p[i] / Math.max(ph.total, 1)}%` : '0';
+      document.getElementById(`ph${i+1}`).classList.toggle('now', ph.now === i + 1);
+    }
 
     for (const [id, name, subId] of [['mDRY', 'DRY', 'mDRYs'], ['mFCs', 'FCs', 'mFCss'], ['mDROP', 'DROP', 'mDROPs']]) {
       const b = document.getElementById(id), at = S.marks[name];
       b.classList.toggle('done', at !== undefined);
       b.disabled = S.t < 0 || (S.dropped && name !== 'DROP');
       const sub = document.getElementById(subId);
-      if (sub) {
-        if (at !== undefined) sub.textContent = `${fmt(at)} · ${S.samples.find(x => x.t >= at)?.bt.toFixed(0) ?? ''} °C`;
-        else if (name === 'DRY') sub.textContent = 'one tap';
-        else if (name === 'DROP') sub.textContent = 'ends the roast';
-        else sub.textContent = s.bt >= 183 ? 'listen: crack expected now' : 'expected near 188 °C';
-      }
+      if (at !== undefined) sub.textContent = `marked ${fmt(at)} · ${S.samples.find(x => x.t >= at)?.bt.toFixed(0) ?? ''} °C`;
+      else if (name === 'FCs') sub.textContent = s.bt >= 183 ? 'listen: crack expected now' : 'expected near 188 °C';
+      else sub.textContent = '';
     }
     document.getElementById('mFCs').classList.toggle('cue', S.marks.FCs === undefined && !S.dropped && s.bt >= 183);
 
@@ -407,7 +483,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       const out = document.getElementById(cfg.key + 'Out');
       out.innerHTML = `${d.pending ?? d.set}<span class="unit"> Hz</span>`;
       out.classList.toggle('pending', d.pending !== null);
-      document.getElementById(cfg.key + 'Actual').textContent = `drive ${d.actual.toFixed(0)} Hz` + (d.run ? '' : ' · stopped');
+      setText(cfg.key + 'Actual', `drive ${d.actual.toFixed(0)} Hz` + (d.run ? '' : ' · stopped'));
       const root = document.getElementById(cfg.key === 'fan' ? 'ctlFan' : 'ctlDrum');
       root.querySelectorAll('.presets button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.value) === (d.pending ?? d.set))));
       root.querySelector('.run .on').setAttribute('aria-pressed', String(d.run));
@@ -422,6 +498,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   const canvas = document.getElementById('chart');
   function draw() {
     const box = canvas.parentElement.getBoundingClientRect();
+    if (box.width < 10 || box.height < 10) return;
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(box.width * dpr) || canvas.height !== Math.round(box.height * dpr)) {
       canvas.width = Math.round(box.width * dpr); canvas.height = Math.round(box.height * dpr);
@@ -429,17 +506,25 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
     const g = canvas.getContext('2d');
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const W = box.width, H = box.height;
-    const pad = { l: 48, r: 44, t: 36, b: 30 };
-    const strip = 34; // fan/drum strip at the bottom of the chart
+    const pad = { l: 48, r: 44, t: 28, b: 30 };
+    const strip = shown.drives ? 34 : 0; // fan/drum strip at the bottom of the chart
     const tMin = -30, tMax = Math.max(15 * 60, S.t + 60);
     const yMin = 50, yMax = 240, rMax = 30;
     const plotB = H - pad.b - strip;
     const X = t => pad.l + (t - tMin) / (tMax - tMin) * (W - pad.l - pad.r);
     const Y = v => pad.t + (1 - (v - yMin) / (yMax - yMin)) * (plotB - pad.t);
-    const R = v => pad.t + (1 - v / rMax) * (plotB - pad.t);
+    const R = v => pad.t + (1 - Math.max(0, Math.min(rMax, v)) / rMax) * (plotB - pad.t);
     g.clearRect(0, 0, W, H);
     g.font = '12px "IBM Plex Sans", system-ui, sans-serif';
     g.lineWidth = 1;
+
+    // phase bands from the marks
+    const ph = [[0, S.marks.DRY, '--ph1'], [S.marks.DRY, S.marks.FCs, '--ph2'], [S.marks.FCs, S.marks.DROP, '--ph3']];
+    for (const [a, b, color] of ph) {
+      if (a === undefined || S.t <= 0) continue;
+      const end = b ?? (S.dropped ? S.marks.DROP : S.t);
+      g.fillStyle = css(color); g.globalAlpha = .09; g.fillRect(X(a), pad.t, X(end) - X(a), plotB - pad.t); g.globalAlpha = 1;
+    }
 
     // grid and axes
     g.strokeStyle = css('--line'); g.fillStyle = css('--muted');
@@ -453,16 +538,20 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       if (m % 2 === 0) g.fillText(m, x, plotB + strip + 8);
       g.globalAlpha = m % 2 === 0 ? .55 : .25; g.beginPath(); g.moveTo(x, pad.t); g.lineTo(x, plotB); g.stroke(); g.globalAlpha = 1;
     }
-    g.textAlign = 'left'; g.fillText('°C', 6, pad.t - 24); g.textAlign = 'right'; g.fillText('°/min', W - 6, pad.t - 24);
+    g.textAlign = 'left'; g.textBaseline = 'bottom'; g.fillText('°C', 6, pad.t - 6); g.textAlign = 'right'; g.fillText('°/min', W - 6, pad.t - 6);
 
-    // phase bands from the marks
-    const band = (a, b, color) => { if (a === undefined) return; g.fillStyle = color; g.globalAlpha = .07; g.fillRect(X(a), pad.t, X(b ?? S.t) - X(a), plotB - pad.t); g.globalAlpha = 1; };
-    band(S.marks.FCs, S.marks.DROP, css('--accent'));
-
-    // background roast #158
-    g.setLineDash([6, 5]); g.strokeStyle = css('--bg-curve'); g.lineWidth = 2;
-    g.beginPath(); for (let t = 0; t <= 690; t += 4) { const x = X(t + BG_SHIFT), y = Y(btCurve(t)); t ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke();
-    g.setLineDash([]);
+    const dashed = (fn, color, width) => {
+      g.setLineDash([6, 5]); g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+      for (let t = 0; t <= 690; t += 4) { const x = X(t + BG_SHIFT), y = Y(fn(t)); t ? g.lineTo(x, y) : g.moveTo(x, y); }
+      g.stroke(); g.setLineDash([]);
+    };
+    if (shown.bgbt) dashed(btCurve, css('--bg-curve'), 2);
+    if (shown.bget) dashed(etCurve, css('--bg-curve'), 1.5);
+    if (shown.limit) {
+      g.setLineDash([2, 4]); g.strokeStyle = css('--limit'); g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(pad.l, Y(HEAT_LIMIT)); g.lineTo(W - pad.r, Y(HEAT_LIMIT)); g.stroke(); g.setLineDash([]);
+      g.fillStyle = css('--limit'); g.textAlign = 'right'; g.textBaseline = 'bottom'; g.fillText('heat limit 200', W - pad.r - 4, Y(HEAT_LIMIT) - 2);
+    }
 
     const line = (key, color, width, scale) => {
       g.strokeStyle = color; g.lineWidth = width; g.lineJoin = 'round'; g.beginPath();
@@ -470,33 +559,37 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       for (const s of S.samples) { const v = s[key]; if (v === null) { started = false; continue; } const x = X(s.t), y = scale(v); started ? g.lineTo(x, y) : g.moveTo(x, y); started = true; }
       g.stroke();
     };
-    line('ror', css('--ror'), 2.5, v => R(Math.max(0, Math.min(rMax, v))));
-    line('et', css('--et'), 3, Y);
-    line('bt', css('--bt'), 4.5, Y);
+    if (shown.etror) line('etror', css('--etror'), 1.5, R);
+    if (shown.ror) line('ror', css('--ror'), 2.5, R);
+    if (shown.exh) line('exh', css('--exh'), 2, Y);
+    if (shown.et) line('et', css('--et'), 3, Y);
+    if (shown.bt) line('bt', css('--bt'), 4.5, Y);
 
     // marks
     g.font = '600 14px "Barlow Condensed", sans-serif';
     for (const [name, at] of Object.entries(S.marks)) {
       const x = X(at); g.strokeStyle = css('--fg'); g.globalAlpha = .5; g.lineWidth = 1;
       g.beginPath(); g.moveTo(x, pad.t); g.lineTo(x, plotB); g.stroke(); g.globalAlpha = 1;
-      g.fillStyle = css('--fg'); g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(`${name} ${fmt(at)}`, x + 4, pad.t + 2);
+      g.fillStyle = css('--fg'); g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(`${MARK_NAMES[name]} ${fmt(at)}`, x + 4, pad.t + 2);
     }
     // now
-    if (!S.dropped && S.t > tMin) { const s = cur(); g.fillStyle = css('--bt'); g.beginPath(); g.arc(X(s.t), Y(s.bt), 6, 0, Math.PI * 2); g.fill(); }
+    if (!S.dropped && S.t > tMin && shown.bt) { const s = cur(); g.fillStyle = css('--bt'); g.beginPath(); g.arc(X(s.t), Y(s.bt), 6, 0, Math.PI * 2); g.fill(); }
 
-    // fan/drum strip: step lines of the drive speeds, labels at each change
-    const sy = plotB + 6, sh = strip - 10;
-    for (const [who, color, max] of [['fan', css('--fan'), 120], ['drum', css('--drum'), 50]]) {
-      g.strokeStyle = color; g.lineWidth = 2; g.beginPath();
-      let first = true;
-      for (const s of S.samples) { const x = X(s.t), y = sy + sh * (1 - s[who] / max); first ? g.moveTo(x, y) : g.lineTo(x, y); first = false; }
-      g.stroke();
-    }
-    g.font = '600 12px "Barlow Condensed", sans-serif'; g.textBaseline = 'bottom';
-    for (const e of S.events) {
-      if (e.auto) continue;
-      g.fillStyle = e.who === 'fan' ? css('--fan') : css('--drum');
-      g.textAlign = 'center'; g.fillText(e.v, X(e.t), sy);
+    // fan/drum strip: drive speeds as step lines, labels at each change
+    if (shown.drives) {
+      const sy = plotB + 6, sh = strip - 10;
+      for (const [who, color, max] of [['fan', css('--fan'), 120], ['drum', css('--drum'), 50]]) {
+        g.strokeStyle = color; g.lineWidth = 2; g.beginPath();
+        let first = true;
+        for (const s of S.samples) { const x = X(s.t), y = sy + sh * (1 - s[who] / max); first ? g.moveTo(x, y) : g.lineTo(x, y); first = false; }
+        g.stroke();
+      }
+      g.font = '600 12px "Barlow Condensed", sans-serif'; g.textBaseline = 'bottom'; g.textAlign = 'center';
+      for (const e of S.events) {
+        if (e.auto) continue;
+        g.fillStyle = e.who === 'fan' ? css('--fan') : css('--drum');
+        g.fillText(e.v, X(e.t), sy);
+      }
     }
   }
 
@@ -514,7 +607,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   }
 
   // ---- wiring
-  buildControl(FAN); buildControl(DRUM);
+  buildControl(FAN); buildControl(DRUM); buildCurveToggles();
   document.getElementById('mDRY').addEventListener('click', () => mark('DRY'));
   document.getElementById('mFCs').addEventListener('click', () => mark('FCs'));
   document.getElementById('mDROP').addEventListener('click', () => mark('DROP'));
@@ -530,11 +623,11 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   document.getElementById('wout').addEventListener('input', checkLoss);
   document.getElementById('win').addEventListener('input', checkLoss);
   document.getElementById('sheetLater').addEventListener('click', closeSheet);
-  document.getElementById('sheetSave').addEventListener('click', () => { closeSheet(); toast('Roast #161 saved (simulation, nothing is stored)', () => {}); });
+  document.getElementById('sheetSave').addEventListener('click', () => { closeSheet(); toast('Roast #161 saved (simulation, nothing is stored)', null); });
   window.addEventListener('resize', draw);
   matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', draw);
 
-  reset(5 * 60 + 10); // open mid-roast, just before DRY
+  reset(5 * 60 + 10); // open mid-roast, just before DRY END
   render();
   requestAnimationFrame(frame);
 })();
