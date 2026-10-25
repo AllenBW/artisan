@@ -55,6 +55,13 @@ PRESET_VERSION: Final[int] = 1 # bump to offer the display preset again on exist
 MODBUS_WRITE: Final = re.compile(r'write\w*\(\s*\[\s*(\d+)\s*,\s*(\d+)') # slave and register of a MODBUS write command
 
 _instance: 'TouchControls|None' = None
+extra_menu_actions: list[QAction] = [] # View menu actions of other fork modules, added again when the menu is rebuilt
+
+
+def add_menu_action(aw:'ApplicationWindow', action:QAction) -> None:
+    extra_menu_actions.append(action)
+    if aw.viewMenu is not None and action not in aw.viewMenu.actions():
+        aw.viewMenu.addAction(action)
 
 
 def px_per_mm(widget:QWidget) -> float:
@@ -386,6 +393,8 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
             menu.addSeparator()
             menu.addAction(self.action)
             menu.addAction(self.preset_action)
+            for a in extra_menu_actions:
+                menu.addAction(a)
 
     def on_write(self, slave:int, register:int, _value:int, ok:bool) -> None:
         for s in self.sections:

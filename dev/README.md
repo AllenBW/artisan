@@ -11,6 +11,9 @@ Windows setup and workflow-analysis tools for this fork.
 | `restore-original.ps1` | Restores that backup. Defaults to a dry run; use `-Apply` to restore, and `-Program` (elevated) to also restore the program folder. Never deletes roast files. |
 | `fz94_sim.py` | A simulated FZ94: a Modbus TCP server with the roaster's real slave IDs and registers, playing the median logged roast curve. Drives ramp to their setpoints and the heat limit caps ET. |
 | `e2e-test.ps1` | End-to-end test of the whole capture pipeline against the simulator, using an isolated `Artisan-E2E` profile (it refuses to start unless Modbus points at the simulator). `e2e_driver.py` operates the app through a full roast; `e2e_verify.py` cross-checks driver ground truth, the interaction log, the Modbus trace, the saved `.alog` and the video, and writes `e2e-report.md`. |
+| `update.ps1` | Safe update of the roaster build. It builds a release from a commit outside OneDrive (`%LOCALAPPDATA%\artisan-fork\r\<commit>`, with its own environment) and runs the E2E tests on it (normal and with faults). Only if every check passes does it become what the **Artisan FZ94** desktop shortcut starts. `-Pull` releases the newest pushed commit, `-Rollback` goes back to the previous release, and `-Status` shows both. |
+| `setup-roast-archive.ps1` | Creates the private roast archive: a git repository (default `~\fz94-roasts`) holding every roast and the tasting log, pushed to a private GitHub repository. It also points the dev and roaster builds at it. |
+| `fake_claude_api.py` | A stand-in for the Claude API, used by the E2E test of the Claude panel (no key, no cost). |
 | `session_frames.py` | Turns a recording into contact sheets, plus frames at every tap, mark or slider move. Events come from the interaction log and/or the roast's `.alog` file, so it works with the installed 3.1.0 too. |
 
 ## Recording a roast for analysis
@@ -58,6 +61,54 @@ Text typed into input fields is never recorded, only the fact that typing happen
 - **Claude desktop chat:** add to `claude_desktop_config.json`:
   `"artisan-roaster": {"command": "npx", "args": ["mcp-remote", "http://127.0.0.1:8765/mcp"]}`
 - **Check it's up:** `python dev\mcp_probe.py` lists the tools and shows the live state.
+
+## Tasting and grind log
+
+**Tasting log** on the touch panel records how a roast tasted and how it was brewed:
+- what to record:
+  - the roast
+  - brew method
+  - grinder and grind setting (with ±0.5 / ±1 steps)
+  - dose, yield, time and water temperature
+  - a 1–5 score
+  - the development verdict (under / right / over)
+  - taste descriptors and notes
+- **Start from last:** fills in the last brew of the same bean and method, so you only change what you changed.
+- **Header:** shows the roast's first crack, drop, development and loss next to earlier tastings. This lets the cup be checked against the roast decisions.
+
+Entries are appended to `tasting-log.jsonl` in the roast folder, so they travel with the roasts. Claude reads them (`list_tastings`) and can log a tasting you tell it (`add_tasting`).
+
+## Claude panel (in the app)
+
+**Ask Claude** on the touch panel (or View → Claude panel) opens a chat window that stays above the chart.
+- **Quick prompts:** *How's it going?*, *What next?*, *Debrief* and *Dial in*, plus a text field.
+- **Tools:** it uses the same read-only tools as the MCP server. It can read the roast, history and tastings, and add notes and tastings, but it can't change the roaster.
+- **API key:** tap **API key** and paste a key from console.anthropic.com. It's stored in the Windows Credential Manager, not in Artisan's settings. `ANTHROPIC_API_KEY` overrides it.
+- **Model:** Claude Opus 5.5 with adaptive thinking.
+  - Effort: `medium` for questions during a roast, `high` for *Debrief* and *Dial in*. Change the default with QSettings `Assistant/effort`.
+  - Server-side refusal fallbacks are on (`fallbacks: "default"`).
+- **Cost:** each question costs API usage on your account.
+
+## Roast archive
+
+Run `setup-roast-archive.ps1` once. After that, every save and tasting copies new or changed roasts and the tasting log into the archive, commits them, and pushes:
+- The push runs in the background. If it fails (for example, when offline), the commit is kept and pushed after the next save.
+- The roast folder (Google Drive) stays where roasts are saved and shared.
+- The archive keeps every version and never deletes.
+- View → *Sync roast archive now* syncs on demand.
+- Configured with QSettings `RoastArchive/repo`, or `ARTISAN_ROAST_ARCHIVE`.
+
+## Updating the roaster build
+
+```powershell
+.\dev\update.ps1 -Pull      # newest pushed commit: build, test (about 10 min, takes over the screen), switch
+.\dev\update.ps1 -Rollback  # back to the previous release
+```
+
+- **Which build:** the **Artisan FZ94** desktop shortcut always starts the last release that passed the tests.
+- **Settings:** the roaster build uses the settings profile `Artisan-FZ94`, created from `Artisan-Dev` on the first update. The tests run with a copy of it, pointed at the simulator.
+- **Failed tests:** nothing changes.
+- **Development:** carries on in this checkout with `run-dev.ps1`, unaffected.
 
 ## Communication robustness (this fork)
 

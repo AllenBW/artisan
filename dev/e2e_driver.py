@@ -51,6 +51,8 @@ class Driver:
         self.step_started = 0.0
         self.charged_at: float | None = None
         self.failures: list[str] = []
+        self.claude_replies = 0
+        self.tasting_roast = ''
 
     def record(self, action: str, **data: Any) -> None:
         now = time.time()
@@ -268,6 +270,95 @@ class Driver:
             QApplication.processEvents()
             self.check(float(aw.qmc.weight[1]) == 1024.0, f'weight out = reading - container ({aw.qmc.weight[1]})')
 
+        # ---- Claude panel, against dev/fake_claude_api.py (ANTHROPIC_BASE_URL set by e2e-test.ps1)
+        from PyQt6.QtWidgets import QTextBrowser
+
+        def claude_panel() -> QWidget | None:
+            return next((w for w in QApplication.topLevelWidgets() if w.objectName() == 'claude_panel' and w.isVisible()), None)
+
+        def claude_open() -> None:
+            self.tap(self.panel('assist_claude'), 'Ask Claude')
+            QApplication.processEvents()
+            self.check(claude_panel() is not None, 'Claude panel opens')
+
+        def claude_ask(index: int) -> None:
+            panel = claude_panel()
+            if panel is None:
+                return
+            self.claude_replies = panel.findChild(QTextBrowser, 'claude_view').toPlainText().count('FAKE-CLAUDE reply')
+            self.tap(panel.findChild(QPushButton, f'claude_quick_{index}'), f'Claude quick prompt {index}')
+
+        def claude_reply() -> bool:
+            panel = claude_panel()
+            text = panel.findChild(QTextBrowser, 'claude_view').toPlainText() if panel is not None else ''
+            if text.count('FAKE-CLAUDE reply') > self.claude_replies:
+                line = next(l for l in reversed(text.splitlines()) if 'FAKE-CLAUDE reply' in l)
+                self.record('claude_reply', text=line)
+                self.check('BT is None' not in line, f'Claude panel reply used the live roast tool ({line.strip()})')
+                return True
+            if time.time() - self.step_started > 30:
+                self.check(False, f'Claude panel replied (shows {text[-200:]!r})')
+                return True
+            return False
+
+        def claude_close() -> None:
+            panel = claude_panel()
+            if panel is not None:
+                panel.close()
+
+        # ---- tasting log (the profile points the log at the test folder)
+        def tasting_dialog() -> QDialog | None:
+            return next((d for d in aw.findChildren(QDialog, 'assist_tasting_dialog') if d.isVisible()), None)
+
+        def tasting_entry() -> None:
+            self.tap(self.panel('assist_tasting'), 'Tasting log')
+            QApplication.processEvents()
+            dlg = tasting_dialog()
+            if dlg is None or not dlg.isVisible():
+                self.check(False, 'tasting dialog opens')
+                return
+            def tap_name(name: str) -> None:
+                self.tap(dlg.findChild(QPushButton, name), name)
+            tap_name('tasting_method_espresso')
+            for field, keys in (('grind', '12'), ('dose_g', '18'), ('yield_g', '36'), ('time_s', '28')):
+                tap_name(f'tasting_select_{field}')
+                for k in keys:
+                    tap_name(f'tasting_key_{k}')
+                if field == 'grind':
+                    tap_name('tasting_step_+0.5')
+            tap_name('tasting_score_4')
+            tap_name('tasting_dev_right')
+            tap_name('tasting_taste_sweet')
+            roasts = dlg.findChild(QListWidget, 'tasting_roasts')
+            item = roasts.currentItem() if roasts is not None else None
+            self.tasting_roast = (item.data(Qt.ItemDataRole.UserRole) or {}).get('name', '') if item is not None else ''
+            self.record('tasting_roast', roast=self.tasting_roast)
+            tap_name('tasting_save')
+            QApplication.processEvents()
+            from artisanlib import touch_controls
+            path = touch_controls._instance.assist.tastings.path if touch_controls._instance is not None else '' # noqa: SLF001
+            rows = [json.loads(l) for l in Path(path).read_text(encoding='utf-8').splitlines() if l.strip()] if path and Path(path).exists() else []
+            last = rows[-1] if rows else {}
+            self.record('tasting_saved', path=path, entry=last)
+            self.check(last.get('roast') == self.tasting_roast and last.get('method') == 'Espresso' and last.get('grind') == 12.5
+                and last.get('dose_g') == 18 and last.get('yield_g') == 36 and last.get('time_s') == 28 and last.get('score') == 4
+                and last.get('development') == 'right' and last.get('descriptors') == ['Sweet'], f'tasting saved with the brew settings ({last})')
+
+        def tasting_recall() -> None:
+            self.tap(self.panel('assist_tasting'), 'Tasting log')
+            QApplication.processEvents()
+            dlg = tasting_dialog()
+            if dlg is None:
+                return
+            self.tap(dlg.findChild(QPushButton, 'tasting_method_espresso'), 'tasting_method_espresso')
+            last = dlg.findChild(QLabel, 'tasting_last')
+            text = last.text() if last is not None else ''
+            self.check('Last espresso' in text and '12.5' in text and '18→36 g' in text, f'tasting dialog recalls the last espresso ({text})')
+            self.tap(dlg.findChild(QPushButton, 'tasting_use_last'), 'tasting_use_last')
+            grind = dlg.findChild(QLineEdit, 'tasting_grind')
+            self.check(grind is not None and grind.text() == '12.5', f"'Start from last' fills the grind ({grind.text() if grind else None})")
+            self.tap(dlg.findChild(QPushButton, 'tasting_close'), 'tasting_close')
+
         def check_window() -> None:
             g = aw.frameGeometry()
             screen = aw.screen()
@@ -299,6 +390,12 @@ class Driver:
             ('to TP+60', until_roast(130)),
             ('guide drying', once(lambda: guide_check('drying', 'Drying', 'DRY END at'))),
             ('fan 20', once(lambda: self.drag(aw.slider1, 'fan slider', 20))),
+            ('claude open', once(claude_open)),
+            ('claude ask 1', once(lambda: claude_ask(0))),
+            ('claude reply 1', claude_reply),
+            ('claude ask 2', once(lambda: claude_ask(1))), # a follow-up: the whole conversation goes with it
+            ('claude reply 2', claude_reply),
+            ('claude close', once(claude_close)),
             ('to DRY', until_roast(DRY_AT)),
             ('DRY', once(lambda: self.tap(aw.buttonDRY, 'DRY'))),
             ('after DRY', wait(1)), # a person looks at the screen before the next action
@@ -333,6 +430,9 @@ class Driver:
             ('OFF', once(lambda: self.tap(aw.buttonONOFF, 'OFF'))),
             ('autosave', wait(5)),
             ('dialogs again', once(dismiss_dialogs)),
+            ('tasting', once(tasting_entry)),
+            ('tasting recall', once(tasting_recall)),
+            ('archive sync', wait(15)), # the roast archive commits and pushes after saves and tastings
             ('finish', once(finish)),
         ]
 

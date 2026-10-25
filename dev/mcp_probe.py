@@ -1,7 +1,7 @@
 """Connects to Artisan's MCP server like Claude does, calls every tool and writes the results as JSON.
 
 Used by e2e-test.ps1 during a test roast, and handy by hand to check that the server is up:
-    python dev/mcp_probe.py [--url http://127.0.0.1:8765/mcp] [--note "text"] [--out probe.json]
+    python dev/mcp_probe.py [--url http://127.0.0.1:8765/mcp] [--note "text"] [--tasting "notes"] [--out probe.json]
 Exit code 1 if the server cannot be reached or a tool call fails.
 """
 
@@ -26,7 +26,7 @@ def payload(result: Any) -> Any:
         return joined
 
 
-async def probe(url: str, note: str) -> dict[str, Any]:
+async def probe(url: str, note: str, tasting: str = '') -> dict[str, Any]:
     out: dict[str, Any] = {'url': url, 'errors': []}
     async with Client(url, read_timeout_seconds=15) as client:
         tools = await client.list_tools()
@@ -39,11 +39,20 @@ async def probe(url: str, note: str) -> dict[str, Any]:
         ]
         if note:
             calls.append(('add_roast_note', {'text': note}))
+        calls.append(('list_tastings', {'limit': 5}))
         for name, args in calls:
             result = await client.call_tool(name, args)
             if getattr(result, 'is_error', False) or getattr(result, 'isError', False):
                 out['errors'].append({name: payload(result)})
             out[name] = payload(result)
+        roasts = out.get('list_roasts')
+        if tasting and isinstance(roasts, list) and roasts:
+            args = {'roast': roasts[0]['name'], 'method': 'pour-over', 'score': 3, 'development': 'under', 'grind': '20',
+                'descriptors': ['Sour'], 'notes': tasting}
+            result = await client.call_tool('add_tasting', args)
+            out['add_tasting'] = payload(result)
+            if getattr(result, 'is_error', False) or getattr(result, 'isError', False) or 'error' in (out['add_tasting'] or {}):
+                out['errors'].append({'add_tasting': out['add_tasting']})
     return out
 
 
@@ -52,9 +61,10 @@ def main() -> None:
     ap.add_argument('--url', default='http://127.0.0.1:8765/mcp')
     ap.add_argument('--note', default='')
     ap.add_argument('--out', default='')
+    ap.add_argument('--tasting', default='', help='also log a tasting of the newest India Natural with these notes')
     args = ap.parse_args()
     try:
-        result = asyncio.run(probe(args.url, args.note))
+        result = asyncio.run(probe(args.url, args.note, args.tasting))
     except Exception as e: # pylint: disable=broad-except
         result = {'url': args.url, 'errors': [repr(e)]}
     text = json.dumps(result, indent=1, default=str)

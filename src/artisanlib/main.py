@@ -28151,7 +28151,18 @@ def main() -> None:
 
     # optional MCP server for Claude (ARTISAN_MCP=1 or View > Claude Assistant), read-only towards the machine
     from artisanlib import mcp_server
-    mcp_server.install(appWindow, touch_controls._instance.assist if touch_controls._instance is not None else None) # noqa: SLF001
+    assist = touch_controls._instance.assist if touch_controls._instance is not None else None # noqa: SLF001
+    # in-app Claude panel (own API key), the same read-only tools as the MCP server
+    from artisanlib import claude_panel
+    # roasts and tastings committed to a private git repository after each save (when configured)
+    from artisanlib import roast_archive
+    # an add-on that fails to start must never keep Artisan from starting
+    for addon in (mcp_server, claude_panel, roast_archive):
+        try:
+            addon.install(appWindow, assist)
+        except Exception as e: # pylint: disable=broad-except
+            _log.exception(e)
+            appWindow.sendmessage(f'{addon.__name__.rsplit(".", 1)[-1]} not started: {e}')
 
     # with a settings profile this instance does not fall back to the viewer when another Artisan runs;
     # warn if the installed Artisan is open, as only one of them can use the machine's port

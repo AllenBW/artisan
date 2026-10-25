@@ -325,6 +325,66 @@ def main() -> None:
         if alog_p:
             notes = str(ast.literal_eval(alog_p.read_text(encoding='utf-8')).get('roastingnotes', ''))
             rep.check('MCP server', 'note added through MCP saved with the roast', 'probe note from e2e' in notes, notes[-120:])
+        expected = {'list_tastings', 'add_tasting'}
+        rep.check('MCP server', 'tasting tools offered', expected <= set(probe.get('tools', [])), str(probe.get('tools')))
+        added = probe.get('add_tasting') or {}
+        rep.check('MCP server', 'tasting added through MCP', isinstance(added, dict) and added.get('source') == 'claude'
+            and added.get('development') == 'under' and added.get('method') == 'Pour-over', str(added)[:200])
+
+    # tasting log (written by the touch dialog and by Claude through MCP), in the test folder only
+    tasting_p = folder / 'tasting-log.jsonl'
+    tastings = load_jsonl(tasting_p) if tasting_p.exists() else []
+    stats['tastings'] = len(tastings)
+    rep.check('tasting log', 'written to the test folder', bool(tastings), f'{len(tastings)} entries')
+    rep.check('tasting log', 'entry from the touch dialog', any(t.get('method') == 'Espresso' and t.get('grind') == 12.5 for t in tastings))
+    rep.check('tasting log', 'entry from Claude (MCP)', any(t.get('notes') == 'probe tasting from e2e' for t in tastings))
+
+    # Claude panel, against dev/fake_claude_api.py
+    requests_p = folder / 'claude-requests.jsonl'
+    requests = [r for r in load_jsonl(requests_p) if r.get('path', '').startswith('/v1/messages')] if requests_p.exists() else []
+    stats['claude_requests'] = len(requests)
+    rep.check('Claude panel', 'two questions with a tool round each (4 requests)', len(requests) == 4, f'{len(requests)} requests')
+    if requests:
+        first = requests[0]
+        body, headers = first['body'], first['headers']
+        rep.check('Claude panel', 'model claude-opus-5-5', body.get('model') == 'claude-opus-5-5', str(body.get('model')))
+        rep.check('Claude panel', 'adaptive thinking and explicit effort', (body.get('thinking') or {}).get('type') == 'adaptive'
+            and (body.get('output_config') or {}).get('effort') == 'medium', f"{body.get('thinking')} {body.get('output_config')}")
+        rep.check('Claude panel', 'server-side fallbacks (default) with their beta header', body.get('fallbacks') == 'default'
+            and 'server-side-fallback-2026-07-01' in headers.get('anthropic-beta', ''), f"{body.get('fallbacks')} / {headers.get('anthropic-beta')}")
+        tools = sorted(t.get('name', '') for t in body.get('tools', []))
+        rep.check('Claude panel', 'the read-only roast tools are offered (8)', len(tools) == 8 and 'get_live_roast' in tools and 'add_tasting' in tools, str(tools))
+        rep.check('Claude panel', 'no machine-control tool offered', not any(w in ' '.join(tools) for w in ('set_', 'write', 'fan', 'drum', 'heat', 'mark')), str(tools))
+        # the SDK sends the key as x-api-key or (2.x) as a bearer token
+        rep.check('Claude panel', 'API key taken from the environment (ANTHROPIC_API_KEY)',
+            'e2e-test-key' in (headers.get('x-api-key', ''), headers.get('authorization', '').removeprefix('Bearer ')))
+    if len(requests) >= 2:
+        msgs = requests[1]['body'].get('messages', [])
+        results = [b for m in msgs if isinstance(m.get('content'), list) for b in m['content'] if b.get('type') == 'tool_result']
+        rep.check('Claude panel', 'both tool calls answered in one turn', len(results) == 2 and all(not r.get('is_error') for r in results),
+            str([str(r.get('content'))[:80] for r in results]))
+    if len(requests) >= 3:
+        msgs = requests[2]['body'].get('messages', [])
+        roles = [m.get('role') for m in msgs]
+        rep.check('Claude panel', 'follow-up carries the whole conversation', roles == ['user', 'assistant', 'user', 'assistant', 'user'], str(roles))
+    replies = [r for r in driver if r['action'] == 'claude_reply']
+    rep.check('Claude panel', 'replies shown in the panel', len(replies) == 2, str([r.get('text') for r in replies]))
+
+    # roast archive: the test roast and the tasting log committed and pushed to the throwaway remote
+    archive, remote = folder / 'archive', folder / 'archive-remote.git'
+    if archive.exists():
+        git = find_tool('git') or 'git'
+        def git_out(*args: str, repo: Path = archive) -> str:
+            return subprocess.run([git, '-C', str(repo), *args], capture_output=True, text=True, check=False).stdout
+        files = set(git_out('ls-tree', '-r', '--name-only', 'HEAD', repo=remote).splitlines())
+        rep.check('roast archive', 'test roast committed and pushed', bool(alog_p) and f'roasts/{alog_p.name}' in files,
+            f'{len(files)} files in the remote')
+        rep.check('roast archive', 'tasting log committed and pushed', 'tasting-log.jsonl' in files)
+        rep.check('roast archive', 'roast history archived', sum(1 for f in files if f.startswith('roasts/')) > 1,
+            f"{sum(1 for f in files if f.startswith('roasts/'))} roasts")
+        stats['archive_commits'] = git_out('log', '--oneline', repo=remote).splitlines()[:5]
+        rep.check('roast archive', 'nothing left uncommitted', not git_out('status', '--porcelain').strip(), git_out('status', '--porcelain')[:200])
+
     if stats.get('speed', 0) and stats['speed'] <= 1:
         rep.check('driver', 'DROP auto-detected (real-time roast)', stats['marks_auto'].get('DROP', False))
 

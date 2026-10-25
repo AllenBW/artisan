@@ -8,6 +8,7 @@
 #  - a one-tap charge preset for fan and drum
 #  - a roast setup dialog: name, bean, green weight and a background roast matched by bean and batch size
 #  - a weigh-out dialog that subtracts the stored weight of the cooling container
+#  - the tasting and grind-setting log (artisanlib/tasting_log.py)
 #
 # Configuration (QSettings group 'RoastAssist'): chargeET, chargeFan, chargeDrum, dtrMin, dtrMax, safeET, tare,
 # elements
@@ -33,11 +34,12 @@ import threading
 from typing import Final, Any, TYPE_CHECKING
 from collections.abc import Callable
 
-from PyQt6.QtCore import Qt, QObject, QSettings
+from PyQt6.QtCore import Qt, QObject, QSettings, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
     QDialog, QComboBox, QLineEdit, QListWidget, QListWidgetItem)
 
 from artisanlib.roast_history import RoastHistory, normalize_bean
+from artisanlib.tasting_log import TastingLog, TastingDialog, default_path as tasting_log_path
 from artisanlib.util import getDataDirectory
 
 if TYPE_CHECKING:
@@ -66,10 +68,13 @@ def last_value(values:list[Any]) -> float|None:
 
 
 class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
-    """Guide, element toggles, charge preset, roast setup and weigh-out for the touch panel."""
+    """Guide, element toggles, charge preset, roast setup, weigh-out and the tasting log for the touch panel."""
+
+    tastingAdded = pyqtSignal(object) # a tasting added from a worker thread (Claude), handled on the GUI thread
 
     def __init__(self, aw:'ApplicationWindow', mm:float, set_fan:Callable[[int], None]|None, set_drum:Callable[[int], None]|None) -> None:
         super().__init__()
+        self.tastingAdded.connect(self.tasting_saved)
         self.aw = aw
         self.mm = mm
         self.set_fan = set_fan
@@ -98,6 +103,8 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.history = RoastHistory(history_folder, cache)
         self.history.load_cache()
         threading.Thread(target=self.history.refresh, daemon=True, name='roast-history').start()
+        self.tastings = TastingLog(tasting_log_path(history_folder))
+        self.tasting_listeners:list[Callable[[dict[str, Any]], None]] = [] # eg. the roast archive
 
         if len(aw.qmc.etypes) > ELEMENTS_EVENT_TYPE and aw.qmc.etypes[ELEMENTS_EVENT_TYPE] in {'Damper', ''}:
             aw.qmc.etypes[ELEMENTS_EVENT_TYPE] = 'Elements'
@@ -137,11 +144,16 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.weigh_button = QPushButton('Weigh out')
         self.weigh_button.setObjectName('assist_weigh')
         self.weigh_button.clicked.connect(self.open_weigh_out)
-        for b in (self.charge_button, self.setup_button, self.weigh_button):
+        self.tasting_button = QPushButton('Tasting log')
+        self.tasting_button.setObjectName('assist_tasting')
+        self.tasting_button.clicked.connect(self.open_tasting)
+        for b in (self.charge_button, self.setup_button, self.weigh_button, self.tasting_button):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         actions.addWidget(self.charge_button, 0, 0, 1, 2)
         actions.addWidget(self.setup_button, 1, 0)
         actions.addWidget(self.weigh_button, 1, 1)
+        actions.addWidget(self.tasting_button, 2, 0)
+        self.actions = actions # the Claude panel adds its button at (2, 1)
 
         self.box = QFrame()
         self.box.setObjectName('assist_box')
@@ -371,6 +383,24 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         dlg = WeighOutDialog(self.aw, self, self.mm)
         dlg.setObjectName('assist_weigh_dialog')
         dlg.open()
+
+    # ---- tasting log
+
+    def open_tasting(self) -> None:
+        dlg = TastingDialog(self.aw, self, self.mm)
+        dlg.setObjectName('assist_tasting_dialog')
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dlg.open()
+
+    def relay_tasting(self, entry:dict[str, Any]) -> None:
+        self.tastingAdded.emit(entry)
+
+    def tasting_saved(self, entry:dict[str, Any]) -> None:
+        for listener in self.tasting_listeners:
+            try:
+                listener(entry)
+            except Exception as e: # pylint: disable=broad-except
+                _log.exception(e)
 
 
 def touch_style(mm:float) -> str:

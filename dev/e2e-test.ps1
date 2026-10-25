@@ -20,7 +20,8 @@ param(
     [int]$Port = 5020,
     [switch]$Maximize,                   # maximize the window, as used at the roaster
     [switch]$Faults,                     # inject faults: BT replies dropped in bursts, the drum 25 command rejected
-    [string]$Venv = (Join-Path $env:LOCALAPPDATA 'artisan-dev\.venv')
+    [string]$Venv = (Join-Path $env:LOCALAPPDATA 'artisan-dev\.venv'),
+    [string]$SourceProfile = ''          # settings to test with (eg. Artisan-FZ94 from update.ps1); default Artisan-Dev, else Artisan
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,7 +38,8 @@ New-Item -ItemType Directory -Force $run | Out-Null
 $key = 'HKCU\Software\artisan-scope\Artisan-E2E'
 Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E' -Recurse -Force -ErrorAction SilentlyContinue
 # start from the dev profile (it carries the dev build's settings), else from the installed Artisan's
-$source = if (Test-Path 'HKCU:\Software\artisan-scope\Artisan-Dev') { 'Artisan-Dev' } else { 'Artisan' }
+$source = if ($SourceProfile -and (Test-Path "HKCU:\Software\artisan-scope\$SourceProfile")) { $SourceProfile }
+    elseif (Test-Path 'HKCU:\Software\artisan-scope\Artisan-Dev') { 'Artisan-Dev' } else { 'Artisan' }
 reg copy "HKCU\Software\artisan-scope\$source" $key /s /f | Out-Null
 Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E\TouchControls' -Recurse -Force -ErrorAction SilentlyContinue # first start: display preset applied
 reg add "$key\Modbus" /v type /t REG_DWORD /d 3 /f | Out-Null
@@ -50,6 +52,21 @@ reg add $key /v profilepath /t REG_SZ /d $run /f | Out-Null
 Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E\RoastAssist' -Recurse -Force -ErrorAction SilentlyContinue
 $history = (Get-ItemProperty 'HKCU:\Software\artisan-scope\Artisan' -ErrorAction SilentlyContinue).profilepath
 if ($history) { reg add "$key\RoastAssist" /v historyFolder /t REG_SZ /d $history /f | Out-Null }
+# tastings go to the test folder, never to the real tasting log next to the roasts
+reg add "$key\RoastAssist" /v tastingLog /t REG_SZ /d (Join-Path $run 'tasting-log.jsonl') /f | Out-Null
+# the roast archive commits to a throwaway repository with a local "remote", never to the real archive
+Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E\RoastArchive' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item 'HKCU:\Software\artisan-scope\Artisan-E2E\Assistant' -Recurse -Force -ErrorAction SilentlyContinue
+# its own MCP port, so the probe can never reach a dev or roaster build that is open at the same time
+$mcpPort = $Port + 3746 # 8766 by default (the dev and roaster builds use 8765)
+reg add "$key\Assistant" /v mcpPort /t REG_DWORD /d $mcpPort /f | Out-Null
+$archiveRemote = Join-Path $run 'archive-remote.git'
+$archive = Join-Path $run 'archive'
+git init --quiet --bare $archiveRemote
+git init --quiet $archive
+git -C $archive remote add origin $archiveRemote
+git -C $archive config user.name 'Artisan E2E'
+git -C $archive config user.email 'e2e@localhost'
 Remove-ItemProperty 'HKCU:\Software\artisan-scope\Artisan-E2E' -Name lastLoadedProfile -ErrorAction SilentlyContinue
 $modbus = Get-ItemProperty "HKCU:\Software\artisan-scope\Artisan-E2E\Modbus"
 if ($modbus.type -ne 3 -or $modbus.host -ne '127.0.0.1') { throw 'Safety check failed: the E2E profile does not point MODBUS at the simulator. Aborting.' }
@@ -72,9 +89,16 @@ $env:ARTISAN_SETTINGS_PROFILE = 'E2E'
 $env:ARTISAN_INTERACTION_LOG = '1'
 $env:ARTISAN_MODBUS_TRACE = '1'
 $env:ARTISAN_MCP = '1'
+$env:ARTISAN_ROAST_ARCHIVE = $archive
+# the Claude panel talks to a stand-in for the Claude API (no key, no cost); it records every request
+$claudePort = $Port + 1
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:$claudePort"
+$env:ANTHROPIC_API_KEY = 'e2e-test-key'
+$fakeClaude = Start-Process $py -ArgumentList @((Join-Path $repo 'dev\fake_claude_api.py'), '--port', $claudePort, '--log', (Join-Path $run 'claude-requests.jsonl')) `
+    -PassThru -WindowStyle Hidden -RedirectStandardError (Join-Path $run 'fake-claude.log')
 # Claude's view: connect to the MCP server mid-roast, call every tool and leave a note in the roast
 $probeOut = Join-Path $run 'mcp-probe.json'
-$probeCmd = "Start-Sleep 75; & '$py' '$(Join-Path $repo 'dev\mcp_probe.py')' --note 'probe note from e2e' --out '$probeOut'"
+$probeCmd = "Start-Sleep 75; & '$py' '$(Join-Path $repo 'dev\mcp_probe.py')' --url 'http://127.0.0.1:$mcpPort/mcp' --note 'probe note from e2e' --tasting 'probe tasting from e2e' --out '$probeOut'"
 $probe = Start-Process powershell -ArgumentList '-NoProfile', '-Command', $probeCmd -PassThru -WindowStyle Hidden
 $env:ARTISAN_SESSION_DIR = $run
 try {
@@ -87,8 +111,10 @@ try {
     Write-Host 'Waiting for the screen recording to finish ...'
     Wait-Process -Id $rec.Id -Timeout ($seconds + 30) -ErrorAction SilentlyContinue
     Stop-Process -Id $sim.Id -Force -ErrorAction SilentlyContinue
-    Remove-Item Env:ARTISAN_SETTINGS_PROFILE, Env:ARTISAN_INTERACTION_LOG, Env:ARTISAN_MODBUS_TRACE, Env:ARTISAN_SESSION_DIR, Env:ARTISAN_MCP -ErrorAction SilentlyContinue
+    Remove-Item Env:ARTISAN_SETTINGS_PROFILE, Env:ARTISAN_INTERACTION_LOG, Env:ARTISAN_MODBUS_TRACE, Env:ARTISAN_SESSION_DIR, Env:ARTISAN_MCP, `
+        Env:ARTISAN_ROAST_ARCHIVE, Env:ANTHROPIC_BASE_URL, Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
     Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+    Stop-Process -Id $fakeClaude.Id -Force -ErrorAction SilentlyContinue
 }
 
 # 5. verification and review frames
