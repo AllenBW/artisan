@@ -70,6 +70,7 @@ cryptography==48.0.1; sys_platform=='darwin' # last version with macOS Intel bin
 cryptography==50.0.0; sys_platform=='Linux' or platform_system=='Windows'
 aiohttp-retry==2.9.1
 pyfulgur==0.40.0
+mcp==2.3.0 # fork: MCP server for the Claude roast assistant (artisanlib/mcp_server.py)
 #
 #
 ######

@@ -36,6 +36,29 @@ Text typed into input fields is never recorded, only the fact that typing happen
 
 `ARTISAN_MODBUS_TRACE=1` (set by `run-dev.ps1` and `e2e-test.ps1`) writes every frame sent to and received from the machine to `~/artisan-sessions/modbus-<stamp>.jsonl`. Each record has a timestamp, the raw hex, the response latency, and a decode (slave, function, register, count or value, the register values, CRC validity, exceptions). Serial RTU and TCP are decoded; ASCII is logged raw. With the variable unset, nothing changes.
 
+## Roast assistant (touch panel)
+
+- **Guide** (top of the panel), updated every half second:
+  - preheat readiness against the charge ET (default 180 °C, with your median for this batch size)
+  - phase times against the background roast
+  - first-crack ETA from BT and rate of rise
+  - live development time and ratio against the drop window (20–25 %)
+  - after DROP: the cool-down to ET 100 °C and a reminder to weigh out
+- **Elements L / C / R:** tap when you switch an element. The state is logged at CHARGE, and every toggle during the roast is logged as an event (event type "Elements").
+- **Charge setup:** one tap sets fan 120 and drum 50.
+- **Roast setup:** name, bean, green weight, and the background roast. The best match (same bean, ±10 % batch size, newest) is listed first; it comes from an index of the roast folder.
+- **Weigh out:** type the scale reading on the keypad; the stored cooling-container weight is subtracted, and the loss % is checked.
+- Settings: QSettings group `RoastAssist` (chargeET, chargeFan, chargeDrum, dtrMin, dtrMax, safeET, tare, historyFolder).
+
+## Claude assistant (MCP server)
+
+`run-dev.ps1` starts an MCP server on `http://127.0.0.1:8765/mcp` (`ARTISAN_MCP=1`, or View → Claude Assistant). It's **read-only towards the roaster**: Claude can follow the live roast, look up past roasts, compare against matched ones, and add notes to the roast, but it can't change fan, drum, heat or marks.
+
+- **Claude Code** (including this app's Code tab, opened on this repo): `.mcp.json` registers `artisan-roaster`; approve it when asked. Then ask, for example, "how is the roast going?" while roasting.
+- **Claude desktop chat:** add to `claude_desktop_config.json`:
+  `"artisan-roaster": {"command": "npx", "args": ["mcp-remote", "http://127.0.0.1:8765/mcp"]}`
+- **Check it's up:** `python dev\mcp_probe.py` lists the tools and shows the live state.
+
 ## Communication robustness (this fork)
 
 - **One lost reply only affects its own channel.** A request that gets no valid reply (after retries) no longer cancels the rest of the read pass. Only that device's readings are lost, and the error message names it, e.g. "(device 25 register 1000)".

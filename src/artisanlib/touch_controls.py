@@ -34,6 +34,8 @@ from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (QApplication, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
     QSizePolicy, QMessageBox)
 
+from artisanlib.roast_assist import RoastAssist
+
 if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # pylint: disable=unused-import
 
@@ -153,7 +155,7 @@ class SliderSection(QFrame):
             b.setObjectName(f'touch_{key}_preset_{v}')
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.clicked.connect(lambda _=False, value=v: self.set_now(value))
-            presets.addWidget(b, i // 3, i % 3)
+            presets.addWidget(b, i // 4, i % 4)
             self.preset_buttons[int(v)] = b
 
         run_row = QHBoxLayout()
@@ -328,8 +330,13 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
         layout.setContentsMargins(int(mm), int(mm), int(mm), int(mm))
         self.sections = [SliderSection(aw, config, step, mm) for config in DEFAULT_SECTIONS
             if config['slider'] < len(aw.eventslidervisibilities) and aw.eventslidervisibilities[config['slider']]]
+        by_name = {s.name.lower(): s for s in self.sections}
+        self.assist = RoastAssist(aw, mm,
+            by_name['fan'].set_now if 'fan' in by_name else None, by_name['drum'].set_now if 'drum' in by_name else None)
+        layout.addWidget(self.assist.guide)
         for s in self.sections:
             layout.addWidget(s)
+        layout.addWidget(self.assist.box)
         layout.addStretch(1) # nothing important at the bottom edge
         self.panel.setMinimumWidth(int(round(52 * mm)))
         self.panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
@@ -367,6 +374,7 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     def refresh(self) -> None:
         self.ensure_menu()
+        self.assist.refresh() # also records the element state at CHARGE when the panel is hidden
         if self.panel.isVisible():
             for s in self.sections:
                 s.refresh()

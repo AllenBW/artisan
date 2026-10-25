@@ -39,6 +39,7 @@ if ($CopySettings) {
 $env:ARTISAN_SETTINGS_PROFILE = $SettingsProfile
 $env:ARTISAN_INTERACTION_LOG = if ($NoLog) { '' } else { '1' }
 $env:ARTISAN_MODBUS_TRACE = if ($NoLog) { '' } else { '1' } # wire-level trace of all MODBUS frames
+$env:ARTISAN_MCP = '1' # MCP server for Claude on http://127.0.0.1:8765/mcp (read-only towards the roaster)
 Push-Location (Join-Path $repo 'src')
 try { & $py artisan.py @args } finally { Pop-Location }
 

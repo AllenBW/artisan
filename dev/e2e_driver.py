@@ -209,6 +209,65 @@ class Driver:
             self.check(('not confirmed' in text) == rejected,
                 f"panel shows {section} {value // 10} as {'not confirmed' if rejected else 'confirmed'} (shows '{text}')")
 
+        # ---- roast assist (guide, roast setup, elements, charge preset, weigh-out)
+        from PyQt6.QtWidgets import QDialog, QComboBox, QLineEdit, QListWidget, QLabel, QPushButton
+
+        def guide_check(phase: str, *needles: str) -> None:
+            label = aw.findChild(QLabel, 'assist_guide')
+            text = label.text() if label is not None else ''
+            plain = ' '.join(text.replace('<br>', ' ').split())
+            missing = [n for n in needles if n not in plain]
+            self.record('guide', phase=phase, text=plain[:300])
+            self.check(not missing, f'guide during {phase} shows {needles}' + (f' (missing {missing})' if missing else ''))
+
+        def roast_setup() -> None:
+            self.tap(self.panel('assist_setup'), 'Roast setup')
+            QApplication.processEvents()
+            dlg = aw.findChild(QDialog, 'assist_setup_dialog')
+            if dlg is None:
+                self.check(False, 'roast setup dialog opens')
+                return
+            bean = dlg.findChild(QComboBox, 'setup_bean')
+            if bean is not None:
+                bean.setCurrentText('India Natural')
+                self.record('set_bean', value='India Natural')
+            self.tap(dlg.findChild(QPushButton, 'setup_weight_1200'), 'setup 1200 g')
+            QApplication.processEvents()
+            backgrounds = dlg.findChild(QListWidget, 'setup_backgrounds')
+            first = backgrounds.item(0) if backgrounds is not None and backgrounds.count() else None
+            suggested = str(first.data(Qt.ItemDataRole.UserRole)) if first is not None else ''
+            self.record('suggested_background', path=suggested, text=first.text() if first is not None else '')
+            self.tap(dlg.findChild(QPushButton, 'setup_apply'), 'setup Apply')
+            QApplication.processEvents()
+            w = aw.qmc.weight
+            self.check(str(aw.qmc.beans) == 'India Natural' and float(w[0]) == 1200.0, f'roast setup set bean and weight ({aw.qmc.beans}, {w[0]})')
+            bg = str(getattr(aw.qmc, 'backgroundpath', '') or '')
+            self.check(bool(suggested) and os.path.normcase(bg) == os.path.normcase(suggested),
+                f'suggested background loaded ({os.path.basename(suggested)} -> {os.path.basename(bg)})')
+            import re as _re
+            grams = _re.search(r'(\d+) g', first.text()) if first is not None else None
+            self.check(' India Natural ' in os.path.basename(suggested) and grams is not None and abs(int(grams.group(1)) - 1200) <= 120,
+                f"suggested background is an India Natural of the same batch size ({grams.group(1) if grams else '?'} g)")
+
+        def weigh_out() -> None:
+            self.tap(self.panel('assist_weigh'), 'Weigh out')
+            QApplication.processEvents()
+            dlg = aw.findChild(QDialog, 'assist_weigh_dialog')
+            if dlg is None:
+                self.check(False, 'weigh-out dialog opens')
+                return
+            tare, reading = dlg.findChild(QLineEdit, 'weigh_tare'), dlg.findChild(QLineEdit, 'weigh_reading')
+            if tare is not None and reading is not None:
+                tare.setText('1246')
+                reading.setFocus()
+                for k in '2270':
+                    self.tap(dlg.findChild(QPushButton, f'weigh_key_{k}'), f'key {k}', touch=True)
+            result = dlg.findChild(QLabel, 'weigh_result')
+            self.record('weigh_result', text=result.text() if result is not None else '')
+            self.tap(dlg.findChild(QPushButton, 'weigh_apply'), 'weigh Apply')
+            QApplication.processEvents()
+            self.check(float(aw.qmc.weight[1]) == 1024.0, f'weight out = reading - container ({aw.qmc.weight[1]})')
+
         def check_window() -> None:
             g = aw.frameGeometry()
             screen = aw.screen()
@@ -221,18 +280,24 @@ class Driver:
             ('preset prompt', answer_preset_prompt),
             ('settle', wait(2)),
             ('window', once(check_window)),
+            ('history indexed', wait(6)), # first scan of the roast folder runs in the background
+            ('roast setup', once(roast_setup)),
+            ('right element off', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
             ('ON', once(lambda: self.tap(aw.buttonONOFF, 'ON'))),
             ('sampling', wait(5)),
+            ('guide preheat', once(lambda: guide_check('preheat', 'India Natural', '1200 g', 'ET'))),
             ('START', once(lambda: self.tap(aw.buttonSTARTSTOP, 'START', touch=False))),
             ('recording', wait(6)),
             ('fan on', once(lambda: self.tap(self.extra_button('Fan On'), 'Fan On'))),
             ('drum on', once(lambda: self.tap(self.extra_button('Drum On'), 'Drum On', touch=False))),
             ('fan 30', once(lambda: self.drag(aw.slider1, 'fan slider', 30))),
             ('drum 50', once(lambda: self.drag(aw.slider2, 'drum slider', 50))),
+            ('charge preset', once(lambda: self.panel_taps(['assist_charge'], 'fan slider', 120, [(23, 8193, 1200)]))),
             ('preheat', wait(5)),
             ('charge', once(charge)),
             ('wait charge', ensure_charge),
             ('to TP+60', until_roast(130)),
+            ('guide drying', once(lambda: guide_check('drying', 'Drying', 'DRY END at'))),
             ('fan 20', once(lambda: self.drag(aw.slider1, 'fan slider', 20))),
             ('to DRY', until_roast(DRY_AT)),
             ('DRY', once(lambda: self.tap(aw.buttonDRY, 'DRY'))),
@@ -243,6 +308,8 @@ class Driver:
             ('drum 25 outcome', wait(1.5)),
             ('check drum 25', once(lambda: check_panel_confirmation('drum', 22, 8193, 250))),
             ('to mid', until_roast(450)),
+            ('guide maillard', once(lambda: guide_check('Maillard', 'Maillard', 'First crack', 'expected in'))),
+            ('right element on', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
             # four quick -5 taps: one command (1000) after the taps stop, not four
             ('panel fan -20', once(lambda: self.panel_taps(['touch_fan_minus'] * 4, 'fan slider', 100, [(23, 8193, 1000)], exactly=1))),
             ('panel settle', wait(2)),
@@ -250,11 +317,15 @@ class Driver:
             ('to FCs', until_roast(FCS_AT)),
             ('FCs', once(lambda: self.tap(aw.buttonFCs, 'FCs'))),
             ('fan 120 again', once(lambda: self.drag(aw.slider1, 'fan slider', 120))),
+            ('development', wait(4)),
+            ('guide development', once(lambda: guide_check('development', 'Development', 'Drop window'))),
             ('to DROP', until_roast(DROP_AT)),
             ('drop', once(drop)),
             ('wait drop', ensure_drop),
             ('cooling', wait(6)),
             ('dialogs', once(dismiss_dialogs)),
+            ('guide after drop', once(lambda: guide_check('cool-down', 'Dropped', 'development', 'Weigh out'))),
+            ('weigh out', once(weigh_out)),
             ('panel drum stop', once(lambda: self.panel_taps(['touch_drum_off'], 'drum slider', 30, [(22, 8192, 1)]))),
             ('drum off', once(lambda: self.tap(self.extra_button('Drum Off'), 'Drum Off'))),
             ('fan off', once(lambda: self.tap(self.extra_button('Fan Off'), 'Fan Off', touch=False))),

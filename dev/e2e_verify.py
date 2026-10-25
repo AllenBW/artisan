@@ -296,6 +296,35 @@ def main() -> None:
                 if qs:
                     rep.check('quantifiers', f'{etypes[etype]} readback settles at the slider value {move[2]}', abs(qs[-1][2] - move[2]) <= 1,
                         f'last quantified event {qs[-1][3]}')
+        # roast assist: setup and weigh-out end up in the saved roast, heating elements are logged as events (type 2)
+        if any(r['action'] == 'set_bean' for r in driver):
+            weight = profile.get('weight', [0, 0, 'g'])
+            rep.check('roast assist', 'bean and green weight from Roast setup saved', profile.get('beans') == 'India Natural' and float(weight[0]) == 1200.0,
+                f"{profile.get('beans')!r}, {weight}")
+            rep.check('roast assist', 'weight out from Weigh out saved (reading - container)', float(weight[1]) == 1024.0, str(weight))
+            element_events = [(round(timex[profile['specialevents'][n]] - (timex[profile['timeindex'][0]] if profile['timeindex'][0] > -1 else 0)),
+                strings[n]) for n in range(len(profile.get('specialevents', []))) if profile['specialeventstype'][n] == 2]
+            stats['element_events'] = element_events
+            rep.check('roast assist', 'element state recorded at CHARGE', any('at charge' in s and 'R' not in s.split('elements')[-1] for _, s in element_events),
+                str(element_events))
+            rep.check('roast assist', 'element toggle during the roast recorded', any(s.startswith('Right on') for _, s in element_events), str(element_events))
+    # Claude's view through the MCP server (dev/mcp_probe.py ran mid-roast)
+    probe_p = folder / 'mcp-probe.json'
+    if probe_p.exists():
+        probe = json.loads(probe_p.read_text(encoding='utf-8'))
+        expected_tools = {'get_live_roast', 'get_roast_curve', 'list_roasts', 'get_roast', 'compare_with_history', 'add_roast_note'}
+        rep.check('MCP server', 'all tools offered', expected_tools <= set(probe.get('tools', [])), str(probe.get('tools')))
+        rep.check('MCP server', 'tool calls without errors', not probe.get('errors'), str(probe.get('errors')))
+        live = probe.get('get_live_roast') or {}
+        rep.check('MCP server', 'live roast seen while recording', isinstance(live, dict) and live.get('state') == 'recording'
+            and isinstance(live.get('BT'), (int, float)) and 'CHARGE' in (live.get('marks') or {}),
+            f"state {live.get('state') if isinstance(live, dict) else live}, BT {live.get('BT') if isinstance(live, dict) else ''}")
+        rep.check('MCP server', 'roast history available', bool(probe.get('list_roasts')), f"{len(probe.get('list_roasts') or [])} roasts")
+        curve = probe.get('get_roast_curve') or {}
+        rep.check('MCP server', 'live curve available', bool(isinstance(curve, dict) and curve.get('rows')), f"{len(curve.get('rows', [])) if isinstance(curve, dict) else 0} rows")
+        if alog_p:
+            notes = str(ast.literal_eval(alog_p.read_text(encoding='utf-8')).get('roastingnotes', ''))
+            rep.check('MCP server', 'note added through MCP saved with the roast', 'probe note from e2e' in notes, notes[-120:])
     if stats.get('speed', 0) and stats['speed'] <= 1:
         rep.check('driver', 'DROP auto-detected (real-time roast)', stats['marks_auto'].get('DROP', False))
 

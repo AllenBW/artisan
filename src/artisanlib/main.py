@@ -28149,6 +28149,10 @@ def main() -> None:
     from artisanlib import touch_controls
     touch_controls.install(appWindow)
 
+    # optional MCP server for Claude (ARTISAN_MCP=1 or View > Claude Assistant), read-only towards the machine
+    from artisanlib import mcp_server
+    mcp_server.install(appWindow, touch_controls._instance.assist if touch_controls._instance is not None else None) # noqa: SLF001
+
     # with a settings profile this instance does not fall back to the viewer when another Artisan runs;
     # warn if the installed Artisan is open, as only one of them can use the machine's port
     if application_settings_profile and not app.artisanviewerMode:

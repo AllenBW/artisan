@@ -53,6 +53,13 @@ foreach ($name in $Profiles) {
 }
 
 $dev = "HKCU:\Software\artisan-scope\$DevProfile"
+# 4. sliders visible in every state (OFF, ON, recording) in the dev profile: toggling View > Sliders while ON had
+#    made them disappear every time ON was pressed
+if (Test-Path "$dev\Sliders") {
+    $old = (Get-ItemProperty "$dev\Sliders").eventslidersflags
+    Set-ItemProperty "$dev\Sliders" -Name eventslidersflags -Type MultiString -Value @('1', '1', '1')
+    Write-Host ("{0}: slider visibility per state {1} -> 1,1,1" -f $DevProfile, $(if ($old) { $old -join ',' } else { 'default' }))
+}
 if (Test-Path $dev) {
     $old = (Get-ItemProperty $dev).Delay
     Set-ItemProperty $dev -Name Delay -Type DWord -Value 2000
