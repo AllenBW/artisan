@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Runs Artisan from source with its own settings profile and the interaction log enabled.
+    Runs Artisan from source with its own settings profile, the interaction log and the MODBUS trace enabled.
 
 .DESCRIPTION
     The dev build keeps its settings under HKCU\Software\artisan-scope\Artisan-Dev, its log under
@@ -38,6 +38,7 @@ if ($CopySettings) {
 
 $env:ARTISAN_SETTINGS_PROFILE = $SettingsProfile
 $env:ARTISAN_INTERACTION_LOG = if ($NoLog) { '' } else { '1' }
+$env:ARTISAN_MODBUS_TRACE = if ($NoLog) { '' } else { '1' } # wire-level trace of all MODBUS frames
 Push-Location (Join-Path $repo 'src')
 try { & $py artisan.py @args } finally { Pop-Location }
 
