@@ -221,6 +221,7 @@ class Driver:
             from PyQt6.QtWidgets import QAbstractButton
             from artisanlib.touch_controls import px_per_mm
             root = root or aw
+            QApplication.processEvents() # pending layout and resize work first, as the screen would show it
             mm = px_per_mm(aw)
             def name(w: QWidget) -> str:
                 text = getattr(w, 'text', lambda: '')().replace('\n', ' ').strip()

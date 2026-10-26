@@ -27,9 +27,10 @@ import logging
 import datetime
 import threading
 from pathlib import Path
-from typing import Final, Any, TYPE_CHECKING
+from typing import Final, Any, TYPE_CHECKING, override
 
-from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtCore import Qt, QSettings, QTimer
+from PyQt6.QtGui import QShowEvent
 from PyQt6.QtWidgets import (QApplication, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QDialog,
     QComboBox, QLineEdit, QListWidget, QListWidgetItem, QButtonGroup, QScrollArea, QWidget)
 
@@ -337,16 +338,34 @@ class TastingDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.addWidget(scroll, 1)
         outer.addLayout(buttons)
-        # as tall as the content, up to the screen (it scrolls only on a smaller screen)
-        screen = aw.screen()
-        available = screen.availableGeometry().height() - int(12 * mm) if screen is not None else int(165 * mm)
-        wanted = body.sizeHint().height() + max(save.sizeHint().height(), self.message.sizeHint().height()) + int(8 * mm)
-        self.resize(int(200 * mm), min(available, wanted))
+        self.mm = mm
+        self.body = body
+        self.save_button = save
+        self.resize(int(200 * mm), int(165 * mm))
 
         self.roasts.currentRowChanged.connect(lambda _: self.update_roast())
         if self.roasts.count():
             self.roasts.setCurrentRow(self.default_row())
         self.update_roast()
+
+    # as tall as the content, up to the screen (it scrolls only on a smaller screen); measured once shown, when the
+    # touch-size style sheet has been applied to the buttons
+    @override
+    def showEvent(self, a0:QShowEvent|None) -> None: # pylint: disable=invalid-name
+        super().showEvent(a0)
+        QTimer.singleShot(0, self.fit_height)
+
+    def fit_height(self) -> None:
+        screen = self.screen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        frame = self.frameGeometry().height() - self.height()
+        wanted = self.body.sizeHint().height() + self.save_button.sizeHint().height() + int(8 * self.mm)
+        height = min(available.height() - frame, wanted)
+        self.resize(self.width(), height)
+        top = max(available.top(), min(self.frameGeometry().top(), available.bottom() - height - frame))
+        self.move(self.frameGeometry().left(), top)
 
     # the roast most likely tasted now: the newest one that is at least a day old, else the newest
     def default_row(self) -> int:
@@ -386,7 +405,7 @@ class TastingDialog(QDialog):
         earlier = self.log.for_roast(r['name'])
         text = ' · '.join(bits)
         if earlier:
-            text += '<br>Tasted before: ' + '<br>'.join(describe(e) for e in earlier[:3])
+            text += f'<br>Tasted before ({len(earlier)}): ' + describe(earlier[0])
         self.roast_info.setText(text)
         self.update_last()
 
