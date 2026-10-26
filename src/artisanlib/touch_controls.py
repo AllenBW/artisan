@@ -32,7 +32,7 @@ from typing import override, Final, Any, TYPE_CHECKING
 from PyQt6.QtCore import Qt, QObject, QEvent, QTimer, QSettings, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (QApplication, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QSizePolicy, QMessageBox)
+    QSizePolicy, QMessageBox, QScrollArea)
 
 from artisanlib.roast_assist import RoastAssist
 
@@ -165,24 +165,26 @@ class SliderSection(QFrame):
             presets.addWidget(b, i // 4, i % 4)
             self.preset_buttons[int(v)] = b
 
-        run_row = QHBoxLayout()
+        # Run / Stop share the title row, to keep the panel short enough for the screen
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.title, 1)
         self.run_buttons:dict[str, QPushButton] = {}
         for state in self.labels:
             b = QPushButton('Run' if state == 'on' else 'Stop')
             b.setObjectName(f'touch_{key}_{state}')
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setMinimumWidth(int(round(16 * mm)))
             b.clicked.connect(lambda _=False, s=state: self.run(s))
-            run_row.addWidget(b)
+            title_row.addWidget(b)
             self.run_buttons[state] = b
 
         layout = QVBoxLayout(self)
         layout.setSpacing(int(round(1.5 * mm)))
         layout.setContentsMargins(*([int(round(2 * mm))] * 4))
-        layout.addWidget(self.title)
+        layout.addLayout(title_row)
         layout.addLayout(value_row)
         layout.addWidget(self.actual)
         layout.addLayout(presets)
-        layout.addLayout(run_row)
 
     def event_color(self) -> str:
         try:
@@ -331,9 +333,20 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
         settings.endGroup()
 
         mm = px_per_mm(aw)
-        self.panel = QFrame()
+        # the panel scrolls when the screen is too short for it: its rows are never squeezed into each other
+        self.panel = QScrollArea()
         self.panel.setObjectName('touchPanel')
-        layout = QVBoxLayout(self.panel)
+        self.panel.setWidgetResizable(True)
+        self.panel.setFrameShape(QFrame.Shape.NoFrame)
+        self.panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QFrame()
+        content.setObjectName('touchPanelContent')
+        self.panel.setWidget(content)
+        self.panel.setStyleSheet('QScrollArea#touchPanel, QFrame#touchPanelContent { background: transparent; }')
+        viewport = self.panel.viewport()
+        if viewport is not None:
+            viewport.setAutoFillBackground(False)
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(int(mm), int(mm), int(mm), int(mm))
         self.sections = [SliderSection(aw, config, step, mm) for config in DEFAULT_SECTIONS
             if config['slider'] < len(aw.eventslidervisibilities) and aw.eventslidervisibilities[config['slider']]]
@@ -345,7 +358,9 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
             layout.addWidget(s)
         layout.addWidget(self.assist.box)
         layout.addStretch(1) # nothing important at the bottom edge
-        self.panel.setMinimumWidth(int(round(52 * mm)))
+        self.content = content
+        self.min_width = int(round(52 * mm))
+        self.fit_width()
         self.panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         # part of the main layout, right of the LCDs (a dock widget would be placed by the window state restored before)
@@ -385,6 +400,14 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
         if self.panel.isVisible():
             for s in self.sections:
                 s.refresh()
+            self.fit_width()
+
+    # wide enough for the content plus a scrollbar, so the content is never cut off on the right should it scroll
+    def fit_width(self) -> None:
+        scrollbar = self.panel.verticalScrollBar()
+        width = max(self.min_width, self.content.minimumSizeHint().width()) + (scrollbar.sizeHint().width() if scrollbar is not None else 0)
+        if self.panel.minimumWidth() != width:
+            self.panel.setFixedWidth(width)
 
     # the View menu is rebuilt on a UI mode change; add the actions again when they are missing
     def ensure_menu(self) -> None:

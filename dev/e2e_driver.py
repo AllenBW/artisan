@@ -214,7 +214,51 @@ class Driver:
         # ---- roast assist (guide, roast setup, elements, charge preset, weigh-out)
         from PyQt6.QtWidgets import QDialog, QComboBox, QLineEdit, QListWidget, QLabel, QPushButton
 
+        # every visible button and slider of a window: fully visible (not clipped by its containers or the window),
+        # not overlapping another one, and the touch panel's buttons at least 8.5 mm tall
+        def layout_check(phase: str, root: QWidget | None = None) -> None:
+            from PyQt6.QtCore import QRect
+            from PyQt6.QtWidgets import QAbstractButton
+            from artisanlib.touch_controls import px_per_mm
+            root = root or aw
+            mm = px_per_mm(aw)
+            def name(w: QWidget) -> str:
+                text = getattr(w, 'text', lambda: '')().replace('\n', ' ').strip()
+                return w.objectName() or (f'{type(w).__name__} {text!r}' if text else type(w).__name__)
+            widgets = [w for w in [*root.findChildren(QAbstractButton), *root.findChildren(QSlider)]
+                if w.isVisible() and w.window() is root and w.width() > 0 and w.height() > 0]
+            rects: list[tuple[QWidget, QRect]] = []
+            problems: list[str] = []
+            for w in widgets:
+                r = QRect(w.mapTo(root, QPoint(0, 0)), w.size())
+                visible = QRect(r)
+                p = w.parentWidget()
+                while p is not None and p is not root:
+                    visible = visible.intersected(QRect(p.mapTo(root, QPoint(0, 0)), p.size()))
+                    p = p.parentWidget()
+                visible = visible.intersected(root.rect())
+                if visible != r:
+                    problems.append(f'{name(w)} clipped ({visible.height()} of {r.height()} px tall visible)')
+                if w.objectName().startswith(('touch_', 'assist_', 'tasting_', 'claude_', 'setup_', 'weigh_')) and r.height() < 8.5 * mm:
+                    problems.append(f'{name(w)} only {r.height() / mm:.1f} mm tall')
+                rects.append((w, r))
+            for i, (a, ra) in enumerate(rects):
+                for b, rb in rects[i + 1:]:
+                    if a.isAncestorOf(b) or b.isAncestorOf(a):
+                        continue
+                    o = ra.intersected(rb)
+                    if o.width() > 2 and o.height() > 2: # touching borders is fine
+                        problems.append(f'{name(a)} overlaps {name(b)} ({o.width()}x{o.height()} px)')
+            if root is not aw: # dialogs and panels: on the screen, out of the taskbar strip
+                screen = root.screen()
+                if screen is not None and not screen.availableGeometry().contains(root.frameGeometry()):
+                    problems.append(f'window {root.frameGeometry().getRect()} outside the screen {screen.availableGeometry().getRect()}')
+            self.record('layout', phase=phase, window=root.objectName() or type(root).__name__, widgets=len(rects), problems=problems[:20])
+            self.check(not problems, f'layout {phase}: {len(rects)} buttons and sliders fully visible, none overlapping'
+                + (f' ({len(problems)} problems: {"; ".join(problems[:4])})' if problems else ''))
+
         def guide_check(phase: str, *needles: str) -> None:
+            layout_check(phase)
             label = aw.findChild(QLabel, 'assist_guide')
             text = label.text() if label is not None else ''
             plain = ' '.join(text.replace('<br>', ' ').split())
@@ -229,6 +273,7 @@ class Driver:
             if dlg is None:
                 self.check(False, 'roast setup dialog opens')
                 return
+            layout_check('roast setup dialog', dlg)
             bean = dlg.findChild(QComboBox, 'setup_bean')
             if bean is not None:
                 bean.setCurrentText('India Natural')
@@ -258,6 +303,7 @@ class Driver:
             if dlg is None:
                 self.check(False, 'weigh-out dialog opens')
                 return
+            layout_check('weigh-out dialog', dlg)
             tare, reading = dlg.findChild(QLineEdit, 'weigh_tare'), dlg.findChild(QLineEdit, 'weigh_reading')
             if tare is not None and reading is not None:
                 tare.setText('1246')
@@ -279,7 +325,10 @@ class Driver:
         def claude_open() -> None:
             self.tap(self.panel('assist_claude'), 'Ask Claude')
             QApplication.processEvents()
-            self.check(claude_panel() is not None, 'Claude panel opens')
+            panel = claude_panel()
+            self.check(panel is not None, 'Claude panel opens')
+            if panel is not None:
+                layout_check('Claude panel', panel)
 
         def claude_ask(index: int) -> None:
             panel = claude_panel()
@@ -296,7 +345,7 @@ class Driver:
                 self.record('claude_reply', text=line)
                 self.check('BT is None' not in line, f'Claude panel reply used the live roast tool ({line.strip()})')
                 return True
-            if time.time() - self.step_started > 30:
+            if time.time() - self.step_started > 90: # the first reply includes loading the SDK
                 self.check(False, f'Claude panel replied (shows {text[-200:]!r})')
                 return True
             return False
@@ -317,6 +366,7 @@ class Driver:
             if dlg is None or not dlg.isVisible():
                 self.check(False, 'tasting dialog opens')
                 return
+            layout_check('tasting dialog', dlg)
             def tap_name(name: str) -> None:
                 self.tap(dlg.findChild(QPushButton, name), name)
             tap_name('tasting_method_espresso')
@@ -373,6 +423,7 @@ class Driver:
             ('window', once(check_window)),
             ('history indexed', wait(6)), # first scan of the roast folder runs in the background
             ('roast setup', once(roast_setup)),
+            ('layout off', once(lambda: layout_check('before ON'))),
             ('right element off', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
             ('ON', once(lambda: self.tap(aw.buttonONOFF, 'ON'))),
             ('sampling', wait(5)),
@@ -430,6 +481,7 @@ class Driver:
             ('OFF', once(lambda: self.tap(aw.buttonONOFF, 'OFF'))),
             ('autosave', wait(5)),
             ('dialogs again', once(dismiss_dialogs)),
+            ('layout after OFF', once(lambda: layout_check('after OFF'))),
             ('tasting', once(tasting_entry)),
             ('tasting recall', once(tasting_recall)),
             ('archive sync', wait(15)), # the roast archive commits and pushes after saves and tastings

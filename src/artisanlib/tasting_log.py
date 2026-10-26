@@ -83,8 +83,8 @@ class TastingLog:
                 return out
             try:
                 with open(self.path, encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
+                    for raw in f:
+                        line = raw.strip()
                         if not line:
                             continue
                         try:
@@ -184,7 +184,7 @@ class TastingDialog(QDialog):
         # roast to taste
         self.roasts = QListWidget()
         self.roasts.setObjectName('tasting_roasts')
-        self.roasts.setMaximumHeight(int(4.2 * h))
+        self.roasts.setMaximumHeight(int(3.2 * h))
         today = datetime.datetime.now().astimezone().date()
         for r in assist.history.roasts()[:40]:
             age = days_off_roast(r.get('date', ''), today)
@@ -233,13 +233,7 @@ class TastingDialog(QDialog):
             grid.addWidget(f, 1, col)
             self.fields[key] = f
         self.target:QLineEdit = self.fields['grind']
-        steps = QHBoxLayout()
-        for label, delta in (('−1', -1.0), ('−0.5', -0.5), ('+0.5', 0.5), ('+1', 1.0)):
-            b = QPushButton(label)
-            b.setObjectName(f'tasting_step_{label}')
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            b.clicked.connect(lambda _=False, d=delta: self.step(d))
-            steps.addWidget(b)
+        # keypad (2 rows of 6) with the grind steps at its right end
         keypad = QGridLayout()
         for i, key in enumerate(['7', '8', '9', '4', '5', '6', '1', '2', '3', '.', '0', '⌫']):
             b = QPushButton(key)
@@ -247,6 +241,12 @@ class TastingDialog(QDialog):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.clicked.connect(lambda _=False, k=key: self.key(k))
             keypad.addWidget(b, i // 6, i % 6)
+        for i, (label, delta) in enumerate((('−1', -1.0), ('+1', 1.0), ('−0.5', -0.5), ('+0.5', 0.5))):
+            b = QPushButton(label)
+            b.setObjectName(f'tasting_step_{label}')
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.clicked.connect(lambda _=False, d=delta: self.step(d))
+            keypad.addWidget(b, i // 2, 6 + i % 2)
 
         self.last = QLabel()
         self.last.setObjectName('tasting_last')
@@ -284,7 +284,7 @@ class TastingDialog(QDialog):
             b.setObjectName(f'tasting_taste_{d.lower()}')
             b.setCheckable(True)
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            crow.addWidget(b, i // 5, i % 5)
+            crow.addWidget(b, 0, i)
             self.descriptor_buttons.append(b)
         self.notes = QLineEdit()
         self.notes.setObjectName('tasting_notes')
@@ -316,13 +316,17 @@ class TastingDialog(QDialog):
         lrow.addWidget(self.last, 1)
         lrow.addWidget(self.use_last)
         layout.addLayout(lrow)
-        layout.addWidget(QLabel('Grinder'))
-        layout.addWidget(self.grinder)
+        grow = QHBoxLayout()
+        grow.addWidget(QLabel('Grinder'))
+        grow.addWidget(self.grinder, 1)
+        layout.addLayout(grow)
         layout.addLayout(grid)
-        layout.addLayout(steps)
         layout.addLayout(keypad)
-        layout.addLayout(srow)
-        layout.addLayout(drow)
+        vrow = QHBoxLayout() # score and development verdict share a row
+        vrow.addLayout(srow, 5)
+        vrow.addSpacing(int(3 * mm))
+        vrow.addLayout(drow, 6)
+        layout.addLayout(vrow)
         layout.addWidget(QLabel('Taste'))
         layout.addLayout(crow)
         layout.addWidget(self.notes)
@@ -333,7 +337,11 @@ class TastingDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.addWidget(scroll, 1)
         outer.addLayout(buttons)
-        self.resize(int(190 * mm), int(165 * mm))
+        # as tall as the content, up to the screen (it scrolls only on a smaller screen)
+        screen = aw.screen()
+        available = screen.availableGeometry().height() - int(12 * mm) if screen is not None else int(165 * mm)
+        wanted = body.sizeHint().height() + max(save.sizeHint().height(), self.message.sizeHint().height()) + int(8 * mm)
+        self.resize(int(200 * mm), min(available, wanted))
 
         self.roasts.currentRowChanged.connect(lambda _: self.update_roast())
         if self.roasts.count():

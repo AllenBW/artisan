@@ -70,7 +70,8 @@ class RoastArchive:
         self.pending = False
         self.extra:set[str] = set() # saved roast files outside the roast folder (eg. a test folder)
         self.relay = ArchiveRelay()
-        self.relay.message.connect(lambda text: aw.sendmessage(text)) # pylint: disable=unnecessary-lambda # sendmessage is a decorated slot
+        # sendmessage is a decorated slot with another signature: connecting it directly raises a TypeError
+        self.relay.message.connect(lambda text: aw.sendmessage(text)) # noqa: PLW0108 # pylint: disable=unnecessary-lambda
         self.timer = QTimer(aw)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.sync)

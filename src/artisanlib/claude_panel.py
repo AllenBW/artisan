@@ -81,6 +81,13 @@ def load_key() -> tuple[str, str]:
     return '', ''
 
 
+def preload_sdk() -> None:
+    try:
+        import anthropic # noqa: F401 # pylint: disable=import-error,unused-import
+    except ImportError:
+        pass
+
+
 class ChatRelay(QObject): # pyright: ignore[reportGeneralTypeIssues]
     """Carries the worker's results to the GUI thread."""
     reply = pyqtSignal(str)
@@ -343,6 +350,8 @@ class ClaudePanel(QDialog):
         self.setStyleSheet(touch_style(mm))
         self.relay = ChatRelay()
         self.chat = ClaudeChat(RoastTools(aw, assist), self.relay)
+        # load the SDK now, while the question is typed or picked: the first import takes seconds
+        threading.Thread(target=preload_sdk, daemon=True, name='claude-preload').start()
         self.transcript:list[tuple[str, str]] = []
 
         self.status = QLabel()
@@ -493,8 +502,8 @@ def install(aw:'ApplicationWindow', assist:'RoastAssist|None') -> None:
     action.triggered.connect(show)
     add_menu_action(aw, action)
     if assist is not None:
-        b = QPushButton('Ask Claude')
+        b = QPushButton('Ask\nClaude')
         b.setObjectName('assist_claude')
         b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         b.clicked.connect(show)
-        assist.actions.addWidget(b, 2, 1)
+        assist.actions.addWidget(b, 1, 3)

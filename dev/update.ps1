@@ -98,7 +98,7 @@ $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
 if (-not $uv) { throw 'uv not found: run .\dev\setup-dev.ps1 first.' }
 if (-not (Test-Path $py)) { & $uv venv $venv --python 3.14 --quiet; if ($LASTEXITCODE -ne 0) { throw 'uv venv failed.' } }
 Write-Host 'Installing requirements ...' -ForegroundColor Cyan
-& $uv pip install --quiet --python $py -r (Join-Path $dir 'src\requirements.txt')
+& $uv pip install --quiet --compile-bytecode --python $py -r (Join-Path $dir 'src\requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Installing the requirements failed: the current release is unchanged.' }
 
 # 3. the production settings profile (first update only)

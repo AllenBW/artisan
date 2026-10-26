@@ -134,26 +134,27 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             elements_row.addWidget(b, 1)
             self.element_buttons.append(b)
 
+        # one row of four two-line buttons under the charge preset, to keep the panel short enough for the screen
         actions = QGridLayout()
         self.charge_button = QPushButton(f'Charge setup: fan {self.charge_fan} · drum {self.charge_drum}')
         self.charge_button.setObjectName('assist_charge')
         self.charge_button.clicked.connect(self.charge_preset)
-        self.setup_button = QPushButton('Roast setup')
+        self.setup_button = QPushButton('Roast\nsetup')
         self.setup_button.setObjectName('assist_setup')
         self.setup_button.clicked.connect(self.open_setup)
-        self.weigh_button = QPushButton('Weigh out')
+        self.weigh_button = QPushButton('Weigh\nout')
         self.weigh_button.setObjectName('assist_weigh')
         self.weigh_button.clicked.connect(self.open_weigh_out)
-        self.tasting_button = QPushButton('Tasting log')
+        self.tasting_button = QPushButton('Tasting\nlog')
         self.tasting_button.setObjectName('assist_tasting')
         self.tasting_button.clicked.connect(self.open_tasting)
         for b in (self.charge_button, self.setup_button, self.weigh_button, self.tasting_button):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        actions.addWidget(self.charge_button, 0, 0, 1, 2)
+        actions.addWidget(self.charge_button, 0, 0, 1, 4)
         actions.addWidget(self.setup_button, 1, 0)
         actions.addWidget(self.weigh_button, 1, 1)
-        actions.addWidget(self.tasting_button, 2, 0)
-        self.actions = actions # the Claude panel adds its button at (2, 1)
+        actions.addWidget(self.tasting_button, 1, 2)
+        self.actions = actions # the Claude panel adds its button at (1, 3)
 
         self.box = QFrame()
         self.box.setObjectName('assist_box')
@@ -161,6 +162,8 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             QPushButton {{ min-height: {h}px; font-size: {int(h * 0.34)}px; border-radius: 6px;
                 border: 1px solid rgba(128,128,128,0.5); background: rgba(128,128,128,0.15); }}
             QPushButton:pressed {{ background: rgba(128,128,128,0.45); }}
+            QPushButton#assist_setup, QPushButton#assist_weigh, QPushButton#assist_tasting, QPushButton#assist_claude {{
+                font-size: {int(h * 0.27)}px; padding: 0px; }}
             QPushButton[objectName^="assist_element_"]:checked {{ background: rgba(224,90,60,0.9); color: white; border-color: rgba(224,90,60,1); }}
             """)
         layout = QVBoxLayout(self.box)
