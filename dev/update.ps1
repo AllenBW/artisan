@@ -39,6 +39,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# a file held open (eg. by OneDrive syncing the repository) makes git ask "Should I try again? (y/n)" when it removes
+# a worktree: never wait on that, the old release is removed on a later update instead
+$env:GIT_ASK_YESNO = 'false'
 $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 $repo = Split-Path -Parent $PSScriptRoot
 $root = Join-Path $env:LOCALAPPDATA 'artisan-fork'
@@ -160,9 +163,6 @@ if (-not (Test-Path $lnk)) {
 }
 
 $keepDirs = @((Read-Release $currentFile), (Read-Release $previousFile))
-# a file held open (eg. by OneDrive syncing the repository) makes git ask "Should I try again? (y/n)": never wait on
-# that, the old release is removed on a later update instead
-$env:GIT_ASK_YESNO = 'false'
 Get-ChildItem $releases -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep |
     Where-Object { $keepDirs -notcontains $_.FullName } | ForEach-Object {
         git -C $repo worktree remove --force $_.FullName
