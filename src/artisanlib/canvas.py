@@ -342,7 +342,7 @@ class tgraphcanvas(QObject):
         'statisticsheight', 'statisticsupper', 'statisticslower', 'autosaveflag', 'autosaveprefix', 'autosavepath', 'autosavealsopath',
         'autosaveaddtorecentfilesflag', 'autosaveimage', 'autosaveimageformat', 'autoasaveimageformat_types', 'ystep_down', 'ystep_up', 'backgroundETcurve', 'backgroundBTcurve',
         'l_temp1', 'l_temp2', 'l_delta1', 'l_delta2', 'l_back1', 'l_back2', 'l_back3', 'l_back4', 'l_delta1B', 'l_delta2B', 'l_BTprojection', 'l_DeltaETprojection', 'l_DeltaBTprojection',
-        'l_ETprojection', 'l_AUCguide', 'l_horizontalcrossline', 'l_verticalcrossline', 'l_timeline', 'legend', 'l_eventtype1dots', 'l_eventtype2dots',
+        'l_ETprojection', 'l_AUCguide', 'l_horizontalcrossline', 'l_verticalcrossline', 'l_timeline', 'redraw_hooks', 'live_hooks', 'legend', 'l_eventtype1dots', 'l_eventtype2dots',
         'l_eventtype3dots', 'l_eventtype4dots', 'l_eteventannos', 'l_bteventannos', 'l_eventtype1annos', 'l_eventtype2annos', 'l_eventtype3annos',
         'l_eventflagannos', 'l_eventflagbackannos', 'l_eventtype1special_annos', 'l_eventtype2special_annos', 'l_eventtype3special_annos', 'l_eventtype4special_annos',
         'l_eventtype1special_backannos', 'l_eventtype2special_backannos', 'l_eventtype3special_backannos', 'l_eventtype4special_backannos',
@@ -1729,6 +1729,10 @@ class tgraphcanvas(QObject):
         self.l_verticalcrossline:Line2D|None = None
 
         self.l_timeline:Line2D|None = None
+        # fork: called at the end of each redraw, before the background is cached (to add static artists), and on each
+        # live update after the curves (to draw animated artists with self.ax.draw_artist)
+        self.redraw_hooks:list[Callable[[], None]] = []
+        self.live_hooks:list[Callable[[], None]] = []
 
         self.legend:Legend|None = None
 
@@ -4297,6 +4301,11 @@ class tgraphcanvas(QObject):
                     self.ax.draw_artist(self.l_DeltaBTprojection)
             if self.l_AUCguide is not None and self.AUCguideFlag and self.AUCguideTime > 0 and self.AUCguideTime < self.endofx:
                 self.ax.draw_artist(self.l_AUCguide)
+            for hook in self.live_hooks:
+                try:
+                    hook()
+                except Exception as e: # pylint: disable=broad-except
+                    _log.exception(e)
 
     # input filter
     # if temp (the actual reading) is outside of the interval [tmin,tmax] or
@@ -11085,6 +11094,12 @@ class tgraphcanvas(QObject):
                     self.l_AUCguide = self.ax.axvline(self.AUCguideTime,visible=(self.AUCguideTime > 0 and self.AUCguideTime < self.endofx),color = self.palette['aucguide'],
                                                 label=self.aw.arabicReshape(QApplication.translate('Label', 'AUCguide')),
                                                 linestyle = '-', linewidth= 1, alpha = .5,sketch_params=None,path_effects=[])
+
+                for hook in self.redraw_hooks:
+                    try:
+                        hook()
+                    except Exception as e: # pylint: disable=broad-except
+                        _log.exception(e)
 
                 ############  ready to plot ############
                 self.updateBackground() # update bitlblit backgrounds

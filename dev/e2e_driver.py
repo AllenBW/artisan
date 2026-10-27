@@ -40,6 +40,9 @@ class Driver:
         # faults injected by the simulator, eg. 'drop=25:7;reject=22:8193:250'
         self.faults = faults
         self.rejects = {tuple(int(x) for x in f.split('=', 1)[1].split(':')) for f in faults.split(';') if f.startswith('reject=')}
+        # slaves whose 1st, (every+1)th, ... write the simulator leaves unanswered: pymodbus must get them through on a repeat
+        self.write_drops = {int(f.split('=', 1)[1].split(':')[0]) for f in faults.split(';') if f.startswith('dropwrite=')}
+        self.writes: list[tuple[int, int, int, bool]] = [] # outcome of every MODBUS write (device, register, value, confirmed)
         self.sim = ModbusTcpClient('127.0.0.1', port=port)
         self.out = out.open('a', encoding='utf-8', buffering=1)
         self.aw: Any = None
@@ -178,6 +181,42 @@ class Driver:
             if modal is not None:
                 self.record('dismiss_dialog', title=modal.windowTitle(), cls=type(modal).__name__)
                 modal.close()
+        def writes_check() -> None:
+            failed = [w for w in self.writes if not w[3] and w[:3] not in self.rejects]
+            self.record('writes', count=len(self.writes), failed=failed, repeats=aw.modbus.write_retries)
+            self.check(bool(self.writes) and not failed, f'every MODBUS write confirmed, except the rejected ones ({len(self.writes)} writes'
+                + (f', not confirmed {failed}' if failed else '') + ')')
+            if self.write_drops:
+                dropped = [w for w in self.writes if w[0] in self.write_drops]
+                self.check(aw.modbus.write_retries > 0 and all(w[3] for w in dropped),
+                    f'writes left unanswered once got through on the automatic repeat ({aw.modbus.write_retries} repeated, {len(dropped)} writes to {sorted(self.write_drops)})')
+
+        # the heating elements: the buttons in the top row, the logged on periods and their lanes on the graph
+        def elements_check(phase: str, expected: list[bool], periods_per_element: list[int] | None = None) -> None:
+            from artisanlib import touch_controls
+            assist = touch_controls._instance.assist if touch_controls._instance is not None else None # noqa: SLF001
+            if assist is None:
+                self.check(False, f'elements {phase}: touch panel present')
+                return
+            assist.refresh()
+            buttons = [b.isChecked() for b in assist.element_buttons]
+            texts = [b.text().replace('\n', ' ') for b in assist.element_buttons]
+            in_top_row = assist.elements_bar.parentWidget() is aw.level1frame
+            # the buttons stay where they are while their time text changes (a moving target is easy to miss)
+            places = [b.mapTo(aw, b.rect().topLeft()).x() for b in assist.element_buttons]
+            self.element_places = getattr(self, 'element_places', None) or places
+            self.check(places == self.element_places, f'elements {phase}: buttons in place ({places}, first seen at {self.element_places})')
+            self.record('elements', phase=phase, buttons=buttons, texts=texts)
+            self.check(buttons == expected and assist.elements == expected and in_top_row,
+                f'elements {phase}: {texts} (expected {expected}, in the top row: {in_top_row})')
+            if periods_per_element is not None:
+                periods = assist.lanes.periods()
+                counts = [len(p) for p in periods]
+                bars = sum(1 for a in assist.lanes.artists if type(a).__name__ == 'Rectangle')
+                self.record('element_periods', phase=phase, periods=[[(round(a, 1), None if b is None else round(b, 1)) for a, b in p] for p in periods], bars=bars)
+                self.check(counts == periods_per_element and bars == sum(counts),
+                    f'elements {phase}: on periods per element {counts} (expected {periods_per_element}), {bars} bars on the graph')
+
         def finish() -> None:
             self.check(qmc.timeindex[0] > -1, 'CHARGE marked')
             self.check(qmc.timeindex[1] > 0, 'DRY marked')
@@ -448,9 +487,10 @@ class Driver:
             ('history indexed', wait(6)), # first scan of the roast folder runs in the background
             ('roast setup', once(roast_setup)),
             ('layout off', once(lambda: layout_check('before ON'))),
-            ('right element off', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
+            ('right element off before ON', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
             ('ON', once(lambda: self.tap(aw.buttonONOFF, 'ON'))),
             ('sampling', wait(5)),
+            ('elements at ON', once(lambda: elements_check('at ON (all on for a new roast)', [True, True, True]))),
             ('guide preheat', once(lambda: guide_check('preheat', 'Preheat', 'ET'))),
             ('START', once(lambda: self.tap(aw.buttonSTARTSTOP, 'START', touch=False))),
             ('recording', wait(6)),
@@ -463,6 +503,7 @@ class Driver:
             ('charge', once(charge)),
             ('wait charge', ensure_charge),
             ('to TP+60', until_roast(130)),
+            ('elements after charge', once(lambda: elements_check('after CHARGE', [True, True, True], [1, 1, 1]))),
             ('guide drying', once(lambda: guide_check('drying', 'Drying', 'DRY END at'))),
             ('fan 20', once(lambda: self.drag(aw.slider1, 'fan slider', 20))),
             ('claude open', once(claude_open)),
@@ -473,6 +514,7 @@ class Driver:
             ('claude close', once(claude_close)),
             ('to DRY', until_roast(DRY_AT)),
             ('DRY', once(lambda: self.tap(aw.buttonDRY, 'DRY'))),
+            ('right element off', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
             ('after DRY', wait(1)), # a person looks at the screen before the next action
             ('panel fan 120', once(lambda: self.panel_taps(['touch_fan_preset_120'], 'fan slider', 120, [(23, 8193, 1200)]))),
             ('heat 190', once(lambda: self.drag(aw.slider4, 'heat slider', 190, touch=False))),
@@ -481,7 +523,9 @@ class Driver:
             ('check drum 25', once(lambda: check_panel_confirmation('drum', 22, 8193, 250))),
             ('to mid', until_roast(450)),
             ('guide maillard', once(lambda: guide_check('Maillard', 'Maillard', 'First crack', 'expected in'))),
+            ('elements right off', once(lambda: elements_check('right off', [True, True, False], [1, 1, 1]))),
             ('right element on', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
+            ('elements right on', once(lambda: elements_check('right on again', [True, True, True], [1, 1, 2]))),
             # four quick -5 taps: one command (1000) after the taps stop, not four
             ('panel fan -20', once(lambda: self.panel_taps(['touch_fan_minus'] * 4, 'fan slider', 100, [(23, 8193, 1000)], exactly=1))),
             ('panel settle', wait(2)),
@@ -510,6 +554,7 @@ class Driver:
             ('tasting', once(tasting_entry)),
             ('tasting recall', once(tasting_recall)),
             ('archive sync', wait(15)), # the roast archive commits and pushes after saves and tastings
+            ('writes', once(writes_check)),
             ('finish', once(finish)),
         ]
 
@@ -520,6 +565,7 @@ class Driver:
                     if type(w).__name__ == 'ApplicationWindow' and w.isVisible():
                         self.aw = w
                         assert self.sim.connect(), 'simulator not reachable'
+                        w.modbus.write_listeners.append(lambda *outcome: self.writes.append(outcome)) # from the MODBUS thread
                         if self.maximize: # the layout used at the roaster: the full available screen area
                             screen = w.screen()
                             if screen is not None:

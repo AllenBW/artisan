@@ -1410,7 +1410,7 @@ class ApplicationWindow(QMainWindow):
         'org_extradevicesettings', 'eventslidervalues', 'eventslidervisibilities', 'eventsliderKeyboardControl', 'eventsliderAlternativeLayout_default',
         'eventsliderAlternativeLayout', 'eventslideractions', 'eventslidercommands', 'eventslideroffsets',
         'eventsliderfactors', 'eventslidermin', 'eventsMaxValue', 'eventslidermax', 'eventslidersflags', 'eventsliderBernoulli', 'eventslidercoarse',
-        'eventslidertemp', 'eventsliderunits', 'eventslidermoved', 'SVslidermoved', 'eventquantifieractive', 'eventquantifiersource', 'eventquantifierSV',
+        'eventslidertemp', 'eventsliderunits', 'eventsliderdescriptionscale', 'eventslidermoved', 'SVslidermoved', 'eventquantifieractive', 'eventquantifiersource', 'eventquantifierSV',
         'eventquantifiermin', 'eventquantifiermax', 'eventquantifiercoarse', 'eventquantifieraction', 'clusterEventsFlag', 'eventquantifierlinspaces',
         'eventquantifierthresholdfine', 'eventquantifierthresholdcoarse', 'eventquantifierthresholdmed', 'lastdigitizedvalue', 'lastdigitizedtemp',
         'readingslcdsflags', 'controlsflags', 'logoimgalpha', 'logoimgflag', 'logofilename', 'redrawOnResize', 'searchtextartisansettings', 'fileMenu', 'editMenu',
@@ -1893,6 +1893,9 @@ class ApplicationWindow(QMainWindow):
         self.eventslidercoarse:list[int] = [0]*self.eventsliders # if 1, sliders step in multiples of 10, if 2, slider steps in 5, otherwise 1
         self.eventslidertemp:list[int] = [0]*self.eventsliders # if 1, slider values are interpreted as temperatures and min/max limit are converted with the temp mode
         self.eventsliderunits:list[str] = ['']*self.eventsliders
+        # fork: the logged event label is the value sent times this, in the slider's unit (eg. 0.1 for a drive that takes
+        # 0.1 Hz steps: 1200 sent is logged as 120Hz); set by the touch panel for the sliders it knows
+        self.eventsliderdescriptionscale:list[float] = [1.0]*self.eventsliders
         self.eventslidermoved:list[int] = [0]*self.eventsliders # just set on move and reset on release to avoid imprecise slider moves
         self.SVslidermoved:int = 0
 
@@ -8376,7 +8379,7 @@ class ApplicationWindow(QMainWindow):
         self.extraeventsactionslastvalue[n] = self.eventslidervalues[n]
         if self.qmc.flagstart:
             value = self.qmc.eventsExternal2InternalValue(self.eventslidervalues[n])
-            description = str(float2float(self.calcSliderSendValue(n),2)).rstrip('0').rstrip('.') + self.eventsliderunits[n]
+            description = str(float2float(self.calcSliderSendValue(n) * self.eventsliderdescriptionscale[n],2)).rstrip('0').rstrip('.') + self.eventsliderunits[n]
             self.qmc.EventRecordAction(extraevent = 1,eventtype=n,eventvalue=value,eventdescription=description)
         self.fireslideraction(n)
 

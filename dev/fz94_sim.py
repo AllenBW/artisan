@@ -41,14 +41,18 @@ log = logging.getLogger('fz94_sim')
 
 
 class FZ94:
-    def __init__(self, speed: float, drops: dict[int, tuple[int, int]] | None = None, rejects: set[tuple[int, int, int]] | None = None) -> None:
+    def __init__(self, speed: float, drops: dict[int, tuple[int, int]] | None = None, rejects: set[tuple[int, int, int]] | None = None,
+            write_drops: dict[int, int] | None = None) -> None:
         self.speed = speed
         # fault injection: slave -> (every, run): of every EVERY requests to it, RUN in a row get no answer
         # (timeouts, like a burst of noise on RS-485 that a single retry does not get through);
         # (slave, register, value) writes answered with exception 3 (illegal data value, like a drive refusing a value)
         self.drops = drops or {}
         self.rejects = rejects or set()
+        # slave -> every: the 1st, (every+1)th, ... write to it gets no answer (its immediate repeat does)
+        self.write_drops = write_drops or {}
         self.request_counts: dict[int, int] = {}
+        self.write_counts: dict[int, int] = {}
         self.charged_at: float | None = None
         self.dropped_at: float | None = None
         drive = lambda: {'hr': {2: 0, 8192: 1, 8193: 300}} # noqa: E731
@@ -163,6 +167,11 @@ class FZ94:
                 if every and self.request_counts[unit] % every < run:
                     log.info('fault: dropped request %d to slave %d', self.request_counts[unit], unit)
                     continue
+                if pdu[0] == 6 and unit in self.write_drops:
+                    self.write_counts[unit] = self.write_counts.get(unit, 0) + 1
+                    if self.write_counts[unit] % self.write_drops[unit] == 1:
+                        log.info('fault: dropped write %d to slave %d', self.write_counts[unit], unit)
+                        continue
                 response = self.handle(unit, pdu)
                 writer.write(struct.pack('>HHHB', tid, pid, len(response) + 1, unit) + response)
                 await writer.drain()
@@ -179,11 +188,13 @@ async def main() -> None:
     ap.add_argument('--speed', type=float, default=1.0, help='roast time runs this many times faster than real time')
     ap.add_argument('--drop', action='append', default=[], metavar='SLAVE:EVERY:RUN', help='of every EVERY requests to SLAVE, leave RUN in a row unanswered')
     ap.add_argument('--reject', action='append', default=[], metavar='SLAVE:REGISTER:VALUE', help='answer this write with exception 3')
+    ap.add_argument('--drop-write', action='append', default=[], metavar='SLAVE:EVERY', help='leave the 1st, EVERY+1th, ... write to SLAVE unanswered')
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(message)s')
     drops = {int(s): (int(n), int(r)) for s, n, r in (d.split(':') for d in args.drop)}
     rejects = {tuple(int(x) for x in r.split(':')) for r in args.reject}
-    sim = FZ94(args.speed, drops, rejects) # type: ignore[arg-type]
+    write_drops = {int(s): int(n) for s, n in (d.split(':') for d in args.drop_write)}
+    sim = FZ94(args.speed, drops, rejects, write_drops) # type: ignore[arg-type]
     server = await asyncio.start_server(sim.serve_client, '127.0.0.1', args.port)
     log.info('FZ94 simulator on 127.0.0.1:%d (speed x%g)', args.port, args.speed)
     async with server:

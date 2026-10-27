@@ -47,7 +47,12 @@ Text typed into input fields is never recorded, only the fact that typing happen
   - first-crack ETA from BT and rate of rise
   - live development time and ratio against the drop window (20–25 %)
   - after DROP: the cool-down to ET 100 °C and a reminder to weigh out
-- **Elements L / C / R:** tap when you switch an element. The state is logged at CHARGE, and every toggle during the roast is logged as an event (event type "Elements").
+- **Elements Left / Center / Right** (top row of the window, between the toolbar and the phase LCDs): tap when you switch an element on or off. There's no intensity, only on/off.
+  - All three start **on** with every roast (pressing ON resets them), since the roaster is never started otherwise.
+  - The state is logged at CHARGE, and every switch is logged as an event (event type "Elements": value 10 × elements on, description names which).
+  - Each button shows how long the element has been on or off.
+  - The graph shows one lane per element along the top (L, C, R) with a bar while it's on; the open bar grows with the roast.
+  - Claude sees each element's on periods and total on time (`heating_elements` in get_live_roast and get_roast).
 - **BEAN / IN / OUT tiles:** always show the bean (and the background roast it's compared with), the green weight, and the roasted weight with the loss %. A tile with an orange border needs filling in (no bean or green weight, or not yet weighed after DROP).
 - **Charge:** one tap sets fan 120 and drum 50.
 - **Roast setup** (tap BEAN or IN): name, bean, green weight, and the background roast. The best match (same bean, ±10 % batch size, newest) is listed first; it comes from an index of the roast folder.
@@ -117,7 +122,12 @@ Run `setup-roast-archive.ps1` once. After that, every save and tasting copies ne
 - **Writes are confirmed.** Every single-register write is checked: a timeout, an exception reply or a wrong echo puts "Modbus write not confirmed: device … register … value …" in the message line and error log. The touch panel shows "sending…" until the drive confirms, and turns red ("not confirmed by the drive") if it doesn't; re-tapping resends.
 - **Serial trace.** On serial (RTU) lines, each reply is logged once, complete, with the number of pieces it arrived in; bytes from the wrong device are marked `noise`.
 - **Settings.** `fix-settings.ps1` also sets read retries to 1.
-- **Fault test.** `e2e-test.ps1 -Faults` makes the simulator drop BT replies in bursts of three (beating one retry) and reject the drum-25 command. It verifies that only BT loses readings and that the panel flags the rejected command.
+- **Fault test.** `e2e-test.ps1 -Faults` makes the simulator drop BT replies in bursts of three (beating one retry) and reject the drum-25 command. It also leaves every 4th fan command unanswered once. It verifies that:
+  - only BT loses readings
+  - the panel flags the rejected command
+  - the unanswered fan commands get through on the automatic repeat (pymodbus resends any unanswered request once; the serial read-retries setting applies to writes too)
+
+  Every run also checks that every Modbus write is confirmed (except the rejected one) and that fan and drum events are labelled in Hz as the drive shows them (the drives take 0.1 Hz steps, so slider 120 sends 1200 = 120 Hz).
 
 ## Notes learned from testing
 

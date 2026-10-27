@@ -30,6 +30,7 @@ from typing import Final, Any, TYPE_CHECKING
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from artisanlib.element_lanes import element_periods, summary as element_summary
 from artisanlib.roast_history import normalize_bean
 from artisanlib.tasting_log import METHODS, VERDICTS, DESCRIPTORS, roast_key, days_off_roast
 
@@ -44,7 +45,9 @@ MARKS: Final[list[str]] = ['CHARGE', 'DRY END', 'FC START', 'FC END', 'SC START'
 INSTRUCTIONS: Final[str] = """\
 You are connected to Artisan, the roast logging software of a Coffee-Tech FZ94 drum roaster (electric elements
 left/center/right switched by hand; an ET controller cuts the heat at its heat limit; fan and drum speeds are set by the
-operator). Temperatures are in degrees Celsius, times in seconds after CHARGE unless stated.
+operator). Temperatures are in degrees Celsius, times in seconds after CHARGE unless stated. The elements are either on
+or off (no intensity); heating_elements has when each was on and its total on time (all three are on at CHARGE unless
+the roast says otherwise). Fan and drum speeds are drive frequencies in Hz.
 
 Use get_live_roast to see the roast in progress (refresh it before each answer during a roast: it changes every 2 s),
 get_roast_curve for its curve, compare_with_history to put it against matched past roasts, and list_roasts / get_roast
@@ -145,6 +148,13 @@ class RoastTools:
         if self.assist is not None:
             guide = ' '.join(re.sub(r'<[^>]+>', '', self.assist.guide.text().replace('<br>', ' — ')).split())
             elements = dict(zip(['left', 'center', 'right'], self.assist.elements, strict=True))
+        element_times = None
+        try:
+            if charge is not None:
+                element_times = element_summary(element_periods(qmc.timex, qmc.specialevents, qmc.specialeventstype,
+                    qmc.specialeventsStrings), charge, charge + roast_time if roast_time is not None else None)
+        except Exception as e: # pylint: disable=broad-except
+            _log.debug(e)
         bg = str(getattr(qmc, 'backgroundpath', '') or '') if getattr(qmc, 'background', False) else ''
         return {
             'state': state, 'sampling_interval_s': qmc.delay / 1000,
@@ -152,7 +162,7 @@ class RoastTools:
             'weight_in': weight[0], 'weight_out': weight[1], 'weight_unit': weight[2],
             'roast_time': roast_time, 'roast_clock': mmss(roast_time),
             'BT': last(temps[1]), 'ET': last(temps[0]), 'BT_rate_of_rise_per_min': last(temps[2]),
-            'extra_channels': extras, 'controls': sliders, 'heating_elements_on': elements,
+            'extra_channels': extras, 'controls': sliders, 'heating_elements_on': elements, 'heating_elements': element_times,
             'marks': marks, 'development': dev, 'background_roast': os.path.basename(bg) if bg else None,
             'recent_events': events, 'guide': guide, 'roasting_notes': qmc.roastingnotes,
         }
@@ -219,7 +229,12 @@ class RoastTools:
                     events = [{'time': round(timex[i] - charge, 1), 'type': etypes[p['specialeventstype'][n]] if p['specialeventstype'][n] < len(etypes) else '',
                         'value': round((p['specialeventsvalue'][n] - 1) * 10), 'label': p['specialeventsStrings'][n]}
                         for n, i in enumerate(p.get('specialevents', []))]
-                    return {'summary': public(r), 'events': events, 'tastings': self.tasting_summary(r['name']),
+                    drop = timex[ti[6]] if len(ti) > 6 and ti[6] > 0 else (timex[-1] if timex else None)
+                    elements = element_summary(element_periods(timex, p.get('specialevents', []), p.get('specialeventstype', []),
+                        p.get('specialeventsStrings', [])), charge, drop)
+                    return {'summary': public(r), 'events': events, 'heating_elements': elements if any(
+                        e['on_periods'] for e in elements.values()) else 'not logged in this roast',
+                        'tastings': self.tasting_summary(r['name']),
                         'curve': {'columns': ['time_s_after_charge', 'BT', 'ET'], 'rows': rows}}
                 except Exception as e: # pylint: disable=broad-except
                     return {'error': str(e)}

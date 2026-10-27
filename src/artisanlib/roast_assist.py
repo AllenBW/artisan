@@ -4,7 +4,8 @@
 #  - a guide that says where the roast is and what comes next, with targets from matched past roasts
 #    (charge readiness, phase times against the background roast, first crack ETA, live development time and
 #    ratio against the drop window, cool-down to a safe ET)
-#  - toggles to log the heating elements (left, center, right) as events
+#  - left/center/right heating element buttons in the window's top bar: each switch is logged as an event, the on
+#    periods are drawn as lanes on the graph (artisanlib/element_lanes.py); all three start on with every roast
 #  - a one-tap charge preset for fan and drum
 #  - always visible tiles for the bean, the green weight and the roasted weight (with the weight loss); tapping them
 #    opens the roast setup and the weigh-out
@@ -12,8 +13,7 @@
 #  - a weigh-out dialog that subtracts the stored weight of the cooling container
 #  - the tasting and grind-setting log (artisanlib/tasting_log.py)
 #
-# Configuration (QSettings group 'RoastAssist'): chargeET, chargeFan, chargeDrum, dtrMin, dtrMax, safeET, tare,
-# elements
+# Configuration (QSettings group 'RoastAssist'): chargeET, chargeFan, chargeDrum, dtrMin, dtrMax, safeET, tare
 
 # LICENSE
 # This program or module is free software: you can redistribute it and/or modify
@@ -41,6 +41,7 @@ from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (QApplication, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
     QDialog, QComboBox, QLineEdit, QListWidget, QListWidgetItem, QSizePolicy)
 
+from artisanlib.element_lanes import ELEMENTS, ELEMENTS_EVENT_TYPE, ElementLanes, state_text
 from artisanlib.roast_history import RoastHistory, normalize_bean
 from artisanlib.tasting_log import TastingLog, TastingDialog, default_path as tasting_log_path
 from artisanlib.util import getDataDirectory
@@ -50,8 +51,6 @@ if TYPE_CHECKING:
 
 _log: Final[logging.Logger] = logging.getLogger(__name__)
 
-ELEMENTS: Final[list[tuple[str, str]]] = [('L', 'Left'), ('C', 'Center'), ('R', 'Right')]
-ELEMENTS_EVENT_TYPE: Final[int] = 2 # the event type logged for the heating elements (Artisan's unused 'Damper')
 FC_BT_DEFAULT: Final[float] = 188.0 # BT at first crack when no history is available
 WEIGHT_PRESETS: Final[list[int]] = [1200, 1400, 1800, 2000]
 TARE_DEFAULT: Final[float] = 1246.0 # the FZ94 cooling container, until a weigh-out stores another weight
@@ -146,14 +145,16 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.dtr_max = float(s.value('dtrMax', 25.0, type=float))
         self.safe_et = float(s.value('safeET', 100.0, type=float))
         self.tare = float(s.value('tare', TARE_DEFAULT, type=float))
-        stored = s.value('elements', None)
         # folder of past roasts to match against; defaults to the profile folder
         history_folder = str(s.value('historyFolder', '', type=str) or getattr(aw, 'userprofilepath', '') or '')
         s.endGroup()
-        self.elements:list[bool] = [str(v).lower() in {'true', '1'} for v in stored] if isinstance(stored, list) and len(stored) == 3 else [True, True, True]
+        # the roaster is never run without all three elements on at the start: every roast starts with them on
+        self.elements:list[bool] = [True] * len(ELEMENTS)
         self.charge_recorded = False # element state recorded at CHARGE for the current roast
         self.cooldown_announced = False
         self.last_flagstart = False
+        self.last_flagon = False
+        self.lanes = ElementLanes(aw.qmc)
 
         # roast history (indexed in the background; the first scan of a large folder takes a few seconds)
         data_dir = getDataDirectory()
@@ -176,21 +177,33 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.guide.setStyleSheet(f'QLabel#assist_guide {{ font-size: {int(h * 0.36)}px; padding: {int(mm)}px; border-radius: 8px;'
             ' border: 1px solid rgba(128,128,128,0.35); background: rgba(128,128,128,0.10); }')
 
+        # heating elements: a bar for the window's top row (placed by the touch panel), each button shows how long
+        # its element has been on or off
         self.element_buttons:list[QPushButton] = []
-        elements_row = QHBoxLayout()
-        title = QLabel('ELEMENTS')
-        title.setStyleSheet(f'font-size: {int(h * 0.3)}px; font-weight: bold;')
-        elements_row.addWidget(title)
+        self.elements_bar = QFrame()
+        self.elements_bar.setObjectName('assist_elements_bar')
+        self.elements_bar.setStyleSheet(f"""
+            QLabel {{ font-size: {int(h * 0.3)}px; font-weight: bold; }}
+            QPushButton {{ min-height: {h}px; max-height: {h}px; font-size: {int(h * 0.28)}px;
+                border-radius: 6px; border: 1px solid rgba(128,128,128,0.5); background: rgba(128,128,128,0.15); }}
+            QPushButton:checked {{ background: rgba(224,90,60,0.9); color: white; border-color: rgba(224,90,60,1); }}
+            """)
+        elements_row = QHBoxLayout(self.elements_bar)
+        elements_row.setContentsMargins(0, 0, 0, 0)
+        elements_row.setSpacing(int(round(1.5 * mm)))
+        elements_row.addWidget(QLabel('ELEMENTS'))
         for i, (short, name) in enumerate(ELEMENTS):
-            b = QPushButton(short)
+            b = QPushButton()
             b.setObjectName(f'assist_element_{short}')
-            b.setToolTip(f'{name} element on/off')
+            b.setToolTip(f'{name} element: tap when you switch it on or off')
             b.setCheckable(True)
             b.setChecked(self.elements[i])
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setFixedWidth(int(round(26 * mm))) # the buttons never move as their time text changes
             b.toggled.connect(lambda on, idx=i: self.element_toggled(idx, on))
-            elements_row.addWidget(b, 1)
+            elements_row.addWidget(b)
             self.element_buttons.append(b)
+        self.update_element_buttons()
 
         # the roast at a glance: bean, green weight and roasted weight tiles (tap to change), then the charge preset,
         # the tasting log and Claude; two rows, to keep the panel short enough for the screen
@@ -230,26 +243,47 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             QLabel[objectName$="_value"] {{ font-size: {int(h * 0.36)}px; font-weight: bold; }}
             QPushButton[attention="true"] {{ border: 2px solid {ATTENTION}; }}
             QPushButton[attention="true"] QLabel[objectName$="_value"] {{ color: {ATTENTION}; }}
-            QPushButton[objectName^="assist_element_"]:checked {{ background: rgba(224,90,60,0.9); color: white; border-color: rgba(224,90,60,1); }}
             """)
         layout = QVBoxLayout(self.box)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(int(round(1.5 * mm)))
-        layout.addLayout(elements_row)
         layout.addLayout(actions)
 
     # ---- elements
 
     def element_state_text(self) -> str:
-        on = [name for (short, name), state in zip(ELEMENTS, self.elements, strict=True) if state]
-        return ('elements ' + '+'.join(n[0] for n in on) + ' on') if on else 'all elements off'
+        return state_text(self.elements)
 
     def element_toggled(self, idx:int, on:bool) -> None:
         self.elements[idx] = on
-        QSettings().setValue('RoastAssist/elements', [str(v).lower() for v in self.elements])
         name = ELEMENTS[idx][1]
         self.record_elements(f"{name} {'on' if on else 'off'} ({self.element_state_text()})")
+        self.update_element_buttons()
         self.aw.sendmessage(f"{name} element {'on' if on else 'off'}")
+
+    def set_elements(self, state:list[bool]) -> None:
+        self.elements = list(state)
+        for b, on in zip(self.element_buttons, self.elements, strict=True):
+            if b.isChecked() != on:
+                b.blockSignals(True)
+                b.setChecked(on)
+                b.blockSignals(False)
+        self.update_element_buttons()
+
+    # 'Left / on 3:12': how long each element has been in its state, from the logged events while recording
+    def update_element_buttons(self) -> None:
+        qmc = self.aw.qmc
+        periods = self.lanes.periods() if qmc.flagstart and qmc.timex else [[] for _ in ELEMENTS]
+        now = qmc.timex[-1] if qmc.timex else 0.0
+        for (_, name), b, on, ps in zip(ELEMENTS, self.element_buttons, self.elements, periods, strict=True):
+            since = None
+            if ps:
+                start, end = ps[-1]
+                since = start if on and end is None else (end if not on else None)
+            state = 'on' if on else 'off'
+            text = f'{name}\n{state} {mmss(now - since)}' if since is not None else f'{name}\n{state}'
+            if b.text() != text:
+                b.setText(text)
 
     def record_elements(self, description:str) -> None:
         qmc = self.aw.qmc
@@ -259,6 +293,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             value = 10 * sum(self.elements) # 0..30 on the event scale: the number of elements on
             qmc.EventRecordAction(extraevent=1, eventtype=ELEMENTS_EVENT_TYPE,
                 eventvalue=qmc.eventsExternal2InternalValue(value), eventdescription=description)
+            self.lanes.update()
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
 
@@ -340,6 +375,10 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     def refresh(self) -> None:
         qmc = self.aw.qmc
+        if qmc.flagon != self.last_flagon:
+            self.last_flagon = qmc.flagon
+            if qmc.flagon: # a new roast session: the elements are all switched on to preheat
+                self.set_elements([True] * len(ELEMENTS))
         # element state goes into the roast at CHARGE (toggles before it are only remembered)
         if qmc.flagstart != self.last_flagstart:
             self.last_flagstart = qmc.flagstart
@@ -348,11 +387,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         if qmc.flagstart and not self.charge_recorded and qmc.timeindex[0] > -1:
             self.charge_recorded = True
             self.record_elements(f'at charge: {self.element_state_text()}')
-        for b, state in zip(self.element_buttons, self.elements, strict=True):
-            if b.isChecked() != state:
-                b.blockSignals(True)
-                b.setChecked(state)
-                b.blockSignals(False)
+        self.update_element_buttons()
         self.refresh_tiles()
         self.guide.setText(self.guide_text())
 

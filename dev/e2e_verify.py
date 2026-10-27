@@ -305,9 +305,19 @@ def main() -> None:
             element_events = [(round(timex[profile['specialevents'][n]] - (timex[profile['timeindex'][0]] if profile['timeindex'][0] > -1 else 0)),
                 strings[n]) for n in range(len(profile.get('specialevents', []))) if profile['specialeventstype'][n] == 2]
             stats['element_events'] = element_events
-            rep.check('roast assist', 'element state recorded at CHARGE', any('at charge' in s and 'R' not in s.split('elements')[-1] for _, s in element_events),
+            # every roast starts with all three on (a toggle before ON is reset), then right off after DRY and on again
+            rep.check('roast assist', 'all elements on at CHARGE', any(s == 'at charge: elements L+C+R on' for _, s in element_events),
                 str(element_events))
-            rep.check('roast assist', 'element toggle during the roast recorded', any(s.startswith('Right on') for _, s in element_events), str(element_events))
+            offs = [t for t, s in element_events if s.startswith('Right off')]
+            ons = [t for t, s in element_events if s.startswith('Right on')]
+            rep.check('roast assist', 'right element off and on again during the roast recorded', bool(offs and ons and offs[0] < ons[-1]),
+                str(element_events))
+            # fan and drum events are labelled in Hz (the drives take 0.1 Hz steps: 1200 sent is 120 Hz)
+            hz = [(etypes[t] if t < len(etypes) else t, strings[n]) for n, t in enumerate(profile.get('specialeventstype', []))
+                if t in (0, 1) and strings[n].endswith('Hz')]
+            values = [float(s[:-2]) for _, s in hz if s[:-2].replace('.', '', 1).isdigit()]
+            rep.check('event labels', 'fan and drum events labelled in Hz as on the drive (eg. 120Hz, not 1200Hz)',
+                bool(values) and max(values) <= 120 and ('Air', '120Hz') in hz, str(hz[:8]))
     # Claude's view through the MCP server (dev/mcp_probe.py ran mid-roast)
     probe_p = folder / 'mcp-probe.json'
     if probe_p.exists():
@@ -320,6 +330,9 @@ def main() -> None:
             and isinstance(live.get('BT'), (int, float)) and 'CHARGE' in (live.get('marks') or {}),
             f"state {live.get('state') if isinstance(live, dict) else live}, BT {live.get('BT') if isinstance(live, dict) else ''}")
         rep.check('MCP server', 'roast history available', bool(probe.get('list_roasts')), f"{len(probe.get('list_roasts') or [])} roasts")
+        elements = (live.get('heating_elements') or {}) if isinstance(live, dict) else {}
+        rep.check('MCP server', 'live roast has the heating element on periods', set(elements) == {'left', 'center', 'right'}
+            and all(e.get('on_periods') for e in elements.values()), str(elements)[:200])
         curve = probe.get('get_roast_curve') or {}
         rep.check('MCP server', 'live curve available', bool(isinstance(curve, dict) and curve.get('rows')), f"{len(curve.get('rows', [])) if isinstance(curve, dict) else 0} rows")
         if alog_p:

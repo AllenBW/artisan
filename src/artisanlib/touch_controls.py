@@ -42,10 +42,12 @@ if TYPE_CHECKING:
 _log: Final[logging.Logger] = logging.getLogger(__name__)
 
 # event type (slider) index -> section; presets are slider values, from the 154 logged roasts of this machine;
-# 'on'/'off' name the custom event buttons whose actions start and stop the drive
+# 'on'/'off' name the custom event buttons whose actions start and stop the drive; 'label_scale' turns the value sent
+# into the slider's unit for the logged event label (the drives take 0.1 Hz steps, confirmed on the drive's keypad:
+# slider 30 sends 300 and the drive shows 30.0 Hz)
 DEFAULT_SECTIONS: Final[list[dict[str, Any]]] = [
-    {'slider': 0, 'name': 'Fan', 'presets': [20, 30, 50, 60, 80, 120], 'on': 'Fan On', 'off': 'Fan Off'},
-    {'slider': 1, 'name': 'Drum', 'presets': [20, 25, 30, 50], 'on': 'Drum On', 'off': 'Drum Off'},
+    {'slider': 0, 'name': 'Fan', 'presets': [20, 30, 50, 60, 80, 120], 'on': 'Fan On', 'off': 'Fan Off', 'label_scale': 0.1},
+    {'slider': 1, 'name': 'Drum', 'presets': [20, 25, 30, 50], 'on': 'Drum On', 'off': 'Drum Off', 'label_scale': 0.1},
 ]
 DEFAULT_STEP: Final[int] = 5
 COMMIT_DELAY_MS: Final[int] = 700 # -/+ taps within this time are combined into one command and one event
@@ -362,10 +364,22 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.min_width = int(round(52 * mm))
         self.fit_width()
         self.panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        for config in DEFAULT_SECTIONS:
+            if config['slider'] < len(aw.eventsliderdescriptionscale) and aw.eventsliderfactors[config['slider']] == 10:
+                aw.eventsliderdescriptionscale[config['slider']] = config['label_scale']
+
+        # the heating element buttons in the empty middle of the top row (the toolbar, then the phase LCDs and
+        # ON/START); the row grows to fit touch-sized buttons
+        index = aw.level1layout.indexOf(aw.phasesLCDsFrame)
+        if index >= 0:
+            aw.level1layout.insertWidget(index, self.assist.elements_bar)
+            aw.level1layout.insertStretch(index + 1)
+            aw.level1frame.setFixedHeight(max(aw.level1frame.minimumHeight(), int(round(9 * mm)) + 7 + 12 + 6)) # + the row's margins
 
         # part of the main layout, right of the LCDs (a dock widget would be placed by the window state restored before)
         aw.midlayout.addWidget(self.panel)
         self.panel.setVisible(self.enabled and bool(self.sections))
+        self.assist.elements_bar.setVisible(not self.panel.isHidden())
 
         # write outcomes from the MODBUS thread
         self.relay = WriteRelay()
@@ -425,6 +439,7 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     def toggle(self, checked:bool = False) -> None:
         self.panel.setVisible(checked and bool(self.sections))
+        self.assist.elements_bar.setVisible(not self.panel.isHidden())
         QSettings().setValue('TouchControls/enabled', checked)
 
     @override

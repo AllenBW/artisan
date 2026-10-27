@@ -105,7 +105,7 @@ class modbusport:
         'inputModes', 'optimizer', 'fetch_max_blocks', 'fail_on_cache_miss', 'disconnect_on_error', 'acceptable_errors', 'activeRegisterSequences',
         'readingsCache', 'SVmultiplier', 'PIDmultiplier', 'SVwriteLong', 'SVwriteFloat',
         'wordorderLittle', '_asyncLoopThread', '_client', 'COMsemaphore', 'default_host', 'host', 'port', 'type', 'lastReadResult', 'commError',
-        'write_listeners']
+        'write_listeners', 'write_retries']
 
     MAX_REGISTER_SEGMENT:int = 100 # maximal length of registers fetched at once if fetch_max_blocks is set
 
@@ -194,6 +194,7 @@ class modbusport:
         # called with (device_id, register, value, confirmed) for each single register write once its outcome is known;
         # called from the MODBUS thread
         self.write_listeners:list[Callable[[int, int, int, bool], None]] = []
+        self.write_retries:int = 0 # writes that only got through on a repeat
 
 
 
@@ -619,12 +620,18 @@ class modbusport:
             self.writeSingleRegister(device_id, register, int(round(value)))
 
     # function 6 write whose outcome is checked: a timeout, an exception response or an unexpected echo is reported
-    # in the message line and the error log; the write listeners (eg. the touch panel) learn the outcome in any case
+    # in the message line and the error log; the write listeners (eg. the touch panel) learn the outcome in any case.
+    # A write without a reply is already sent again by pymodbus (the client's retries, the serial read retries
+    # setting, apply to every request, writes included); writes that only got through on a repeat are counted and logged.
     async def write_register_confirmed(self, device_id:int, register:int, value:int) -> None:
         problem = ''
         try:
             assert self._client is not None
             res = await self._client.write_register(register, value, device_id=device_id) # raises on no response
+            retries = int(getattr(res, 'retries', 0) or 0)
+            if retries:
+                self.write_retries += 1
+                _log.info('MODBUS write got through on repeat %d: device %d register %d value %d', retries, device_id, register, value)
             if res.isError():
                 problem = f"exception response {getattr(res, 'exception_code', '?')}"
             elif getattr(res, 'address', register) != register or list(getattr(res, 'registers', None) or [value])[:1] != [value]:
