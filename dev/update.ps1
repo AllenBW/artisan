@@ -160,10 +160,14 @@ if (-not (Test-Path $lnk)) {
 }
 
 $keepDirs = @((Read-Release $currentFile), (Read-Release $previousFile))
+# a file held open (eg. by OneDrive syncing the repository) makes git ask "Should I try again? (y/n)": never wait on
+# that, the old release is removed on a later update instead
+$env:GIT_ASK_YESNO = 'false'
 Get-ChildItem $releases -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep |
     Where-Object { $keepDirs -notcontains $_.FullName } | ForEach-Object {
         git -C $repo worktree remove --force $_.FullName
-        Write-Host "Removed old release $($_.Name)"
+        if ($LASTEXITCODE -eq 0) { Write-Host "Removed old release $($_.Name)" }
+        else { Write-Warning "Old release $($_.Name) not removed (in use); retried on the next update" }
     }
 
 Write-Host "Updated. Current: $(Describe $dir)" -ForegroundColor Green
