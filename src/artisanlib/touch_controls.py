@@ -410,11 +410,21 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     def refresh(self) -> None:
         self.ensure_menu()
+        self.keep_toolbar_compact()
         self.assist.refresh() # also records the element state at CHARGE when the panel is hidden
         if self.panel.isVisible():
             for s in self.sections:
                 s.refresh()
             self.fit_width()
+
+    # the plot toolbar left of the element buttons would otherwise take up spare width in the top row and give it back
+    # when the phase LCDs appear at START, moving the element buttons; it is rebuilt on some UI changes, so checked again
+    def keep_toolbar_compact(self) -> None:
+        ntb = getattr(self.aw, 'ntb', None)
+        if ntb is not None and ntb.sizePolicy().horizontalPolicy() != QSizePolicy.Policy.Maximum:
+            policy = ntb.sizePolicy()
+            policy.setHorizontalPolicy(QSizePolicy.Policy.Maximum)
+            ntb.setSizePolicy(policy)
 
     # wide enough for the content plus a scrollbar, so the content is never cut off on the right should it scroll
     def fit_width(self) -> None:

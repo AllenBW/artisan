@@ -183,6 +183,7 @@ def main() -> None:
     # injected faults (simulator): dropped requests to a slave, rejected writes
     faults = next((r.get('faults') or '' for r in driver if r['action'] == 'app_ready'), '')
     dropped_slaves = {int(f.split('=', 1)[1].split(':')[0]) for f in faults.split(';') if f.startswith('drop=')}
+    write_dropped_slaves = {int(f.split('=', 1)[1].split(':')[0]) for f in faults.split(';') if f.startswith('dropwrite=')}
     rejected = {tuple(int(x) for x in f.split('=', 1)[1].split(':')) for f in faults.split(';') if f.startswith('reject=')}
     stats['faults'] = faults
     exceptions = [r for r in rx if 'exception' in r]
@@ -192,7 +193,8 @@ def main() -> None:
     # (works for RTU, which has no transaction id, and for TCP)
     frames = [r for r in trace if r.get('dir') in {'tx', 'rx'} and not r.get('noise')]
     unanswered = [f for i, f in enumerate(frames) if f['dir'] == 'tx' and not (i + 1 < len(frames) and frames[i+1]['dir'] == 'rx' and frames[i+1].get('slave') == f.get('slave'))]
-    unexpected_miss = [f for f in unanswered if f.get('slave') not in dropped_slaves]
+    unexpected_miss = [f for f in unanswered if f.get('slave') not in dropped_slaves
+        and not (f.get('slave') in write_dropped_slaves and f.get('fc') == 6)]
     rep.check('MODBUS trace', 'every request answered (except injected drops)', not unexpected_miss,
         f"{len(unanswered)} unanswered, from slaves {sorted({f.get('slave') for f in unanswered})}")
     if dropped_slaves:
