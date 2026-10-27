@@ -6,6 +6,8 @@
 #    ratio against the drop window, cool-down to a safe ET)
 #  - toggles to log the heating elements (left, center, right) as events
 #  - a one-tap charge preset for fan and drum
+#  - always visible tiles for the bean, the green weight and the roasted weight (with the weight loss); tapping them
+#    opens the roast setup and the weigh-out
 #  - a roast setup dialog: name, bean, green weight and a background roast matched by bean and batch size
 #  - a weigh-out dialog that subtracts the stored weight of the cooling container
 #  - the tasting and grind-setting log (artisanlib/tasting_log.py)
@@ -31,12 +33,13 @@ import os
 import bisect
 import logging
 import threading
-from typing import Final, Any, TYPE_CHECKING
+from typing import Final, Any, TYPE_CHECKING, override
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, QObject, QSettings, pyqtSignal
+from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (QApplication, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QDialog, QComboBox, QLineEdit, QListWidget, QListWidgetItem)
+    QDialog, QComboBox, QLineEdit, QListWidget, QListWidgetItem, QSizePolicy)
 
 from artisanlib.roast_history import RoastHistory, normalize_bean
 from artisanlib.tasting_log import TastingLog, TastingDialog, default_path as tasting_log_path
@@ -51,6 +54,13 @@ ELEMENTS: Final[list[tuple[str, str]]] = [('L', 'Left'), ('C', 'Center'), ('R', 
 ELEMENTS_EVENT_TYPE: Final[int] = 2 # the event type logged for the heating elements (Artisan's unused 'Damper')
 FC_BT_DEFAULT: Final[float] = 188.0 # BT at first crack when no history is available
 WEIGHT_PRESETS: Final[list[int]] = [1200, 1400, 1800, 2000]
+TARE_DEFAULT: Final[float] = 1246.0 # the FZ94 cooling container, until a weigh-out stores another weight
+ATTENTION: Final[str] = '#d9822b'
+UNIT_GRAMS: Final[dict[str, float]] = {'g': 1.0, 'kg': 1000.0, 'lb': 453.592, 'oz': 28.3495}
+
+
+def grams_per_unit(unit:Any) -> float:
+    return UNIT_GRAMS.get(str(unit).lower(), 1.0)
 
 
 def mmss(seconds:float|None) -> str:
@@ -65,6 +75,54 @@ def last_value(values:list[Any]) -> float|None:
         if isinstance(v, (int, float)) and v != -1:
             return float(v)
     return None
+
+
+class Tile(QPushButton):
+    """A tap target showing a small caption over a large value; a long value is cut short, never widening the panel."""
+
+    def __init__(self, name:str, caption:str, tip:str) -> None:
+        super().__init__()
+        self.setObjectName(name)
+        self.setToolTip(tip) # also names the tap in the interaction log
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.caption = QLabel(caption)
+        self.caption.setObjectName(f'{name}_caption')
+        self.value = QLabel()
+        self.value.setObjectName(f'{name}_value')
+        self.full_value = ''
+        for label in (self.caption, self.value):
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(3, 2, 3, 2)
+        layout.setSpacing(0)
+        layout.addWidget(self.caption)
+        layout.addWidget(self.value)
+
+    def show_values(self, caption:str, value:str, attention:bool = False) -> None:
+        if self.caption.text() != caption:
+            self.caption.setText(caption)
+        if self.full_value != value:
+            self.full_value = value
+            self.elide()
+        if self.property('attention') != attention:
+            self.setProperty('attention', attention)
+            for w in (self, self.value):
+                style = w.style()
+                if style is not None:
+                    style.unpolish(w)
+                    style.polish(w)
+
+    def elide(self) -> None:
+        width = self.value.width() if self.value.width() > 10 else self.width() - 6
+        self.value.setText(self.value.fontMetrics().elidedText(self.full_value, Qt.TextElideMode.ElideRight, max(width, 10)))
+        self.value.setToolTip(self.full_value)
+
+    @override
+    def resizeEvent(self, a0:QResizeEvent|None) -> None: # pylint: disable=invalid-name
+        super().resizeEvent(a0)
+        self.elide()
 
 
 class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
@@ -87,7 +145,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.dtr_min = float(s.value('dtrMin', 20.0, type=float))
         self.dtr_max = float(s.value('dtrMax', 25.0, type=float))
         self.safe_et = float(s.value('safeET', 100.0, type=float))
-        self.tare = float(s.value('tare', 0.0, type=float))
+        self.tare = float(s.value('tare', TARE_DEFAULT, type=float))
         stored = s.value('elements', None)
         # folder of past roasts to match against; defaults to the profile folder
         history_folder = str(s.value('historyFolder', '', type=str) or getattr(aw, 'userprofilepath', '') or '')
@@ -134,26 +192,30 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             elements_row.addWidget(b, 1)
             self.element_buttons.append(b)
 
-        # one row of four two-line buttons under the charge preset, to keep the panel short enough for the screen
+        # the roast at a glance: bean, green weight and roasted weight tiles (tap to change), then the charge preset,
+        # the tasting log and Claude; two rows, to keep the panel short enough for the screen
         actions = QGridLayout()
-        self.charge_button = QPushButton(f'Charge setup: fan {self.charge_fan} · drum {self.charge_drum}')
+        self.bean_tile = Tile('assist_setup', 'BEAN', 'Roast setup: bean, green weight and background')
+        self.bean_tile.clicked.connect(self.open_setup)
+        self.in_tile = Tile('assist_weight_in', 'IN', 'Green weight (roast setup)')
+        self.in_tile.clicked.connect(self.open_setup)
+        self.out_tile = Tile('assist_weigh', 'OUT', 'Weigh out: roasted weight and weight loss')
+        self.out_tile.clicked.connect(self.open_weigh_out)
+        self.charge_button = QPushButton(f'Charge\nfan {self.charge_fan} · drum {self.charge_drum}')
         self.charge_button.setObjectName('assist_charge')
         self.charge_button.clicked.connect(self.charge_preset)
-        self.setup_button = QPushButton('Roast\nsetup')
-        self.setup_button.setObjectName('assist_setup')
-        self.setup_button.clicked.connect(self.open_setup)
-        self.weigh_button = QPushButton('Weigh\nout')
-        self.weigh_button.setObjectName('assist_weigh')
-        self.weigh_button.clicked.connect(self.open_weigh_out)
         self.tasting_button = QPushButton('Tasting\nlog')
         self.tasting_button.setObjectName('assist_tasting')
         self.tasting_button.clicked.connect(self.open_tasting)
-        for b in (self.charge_button, self.setup_button, self.weigh_button, self.tasting_button):
+        for b in (self.charge_button, self.tasting_button):
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        actions.addWidget(self.charge_button, 0, 0, 1, 4)
-        actions.addWidget(self.setup_button, 1, 0)
-        actions.addWidget(self.weigh_button, 1, 1)
+        actions.addWidget(self.bean_tile, 0, 0, 1, 2)
+        actions.addWidget(self.in_tile, 0, 2)
+        actions.addWidget(self.out_tile, 0, 3)
+        actions.addWidget(self.charge_button, 1, 0, 1, 2)
         actions.addWidget(self.tasting_button, 1, 2)
+        for column in range(4):
+            actions.setColumnStretch(column, 1)
         self.actions = actions # the Claude panel adds its button at (1, 3)
 
         self.box = QFrame()
@@ -162,8 +224,12 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             QPushButton {{ min-height: {h}px; font-size: {int(h * 0.34)}px; border-radius: 6px;
                 border: 1px solid rgba(128,128,128,0.5); background: rgba(128,128,128,0.15); }}
             QPushButton:pressed {{ background: rgba(128,128,128,0.45); }}
-            QPushButton#assist_setup, QPushButton#assist_weigh, QPushButton#assist_tasting, QPushButton#assist_claude {{
+            QPushButton#assist_charge, QPushButton#assist_tasting, QPushButton#assist_claude {{
                 font-size: {int(h * 0.27)}px; padding: 0px; }}
+            QLabel[objectName$="_caption"] {{ font-size: {int(h * 0.22)}px; color: rgba(160,160,160,1); }}
+            QLabel[objectName$="_value"] {{ font-size: {int(h * 0.36)}px; font-weight: bold; }}
+            QPushButton[attention="true"] {{ border: 2px solid {ATTENTION}; }}
+            QPushButton[attention="true"] QLabel[objectName$="_value"] {{ color: {ATTENTION}; }}
             QPushButton[objectName^="assist_element_"]:checked {{ background: rgba(224,90,60,0.9); color: white; border-color: rgba(224,90,60,1); }}
             """)
         layout = QVBoxLayout(self.box)
@@ -234,10 +300,15 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         return None
 
     def weight_in_g(self) -> float:
+        return self.weight_g(0)
+
+    def weight_out_g(self) -> float:
+        return self.weight_g(1)
+
+    def weight_g(self, i:int) -> float:
         try:
             w = self.aw.qmc.weight
-            factor = {'g': 1.0, 'kg': 1000.0, 'lb': 453.592, 'oz': 28.3495}.get(str(w[2]).lower(), 1.0)
-            return float(w[0] or 0) * factor
+            return float(w[i] or 0) * grams_per_unit(w[2])
         except Exception: # pylint: disable=broad-except
             return 0.0
 
@@ -282,7 +353,19 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
                 b.blockSignals(True)
                 b.setChecked(state)
                 b.blockSignals(False)
+        self.refresh_tiles()
         self.guide.setText(self.guide_text())
+
+    def refresh_tiles(self) -> None:
+        qmc = self.aw.qmc
+        bean = str(qmc.beans or '').strip()
+        bg = self.background_entry()
+        self.bean_tile.show_values('BEAN' + (f" · vs #{bg['name'].split(' ')[0]}" if bg else ''), bean or 'tap to set', not bean)
+        w_in, w_out = self.weight_in_g(), self.weight_out_g()
+        self.in_tile.show_values('IN', f'{w_in:.0f} g' if w_in > 0 else 'set', w_in <= 0)
+        dropped = qmc.timeindex[6] > 0
+        loss = f' · {100 * (w_in - w_out) / w_in:.1f} %' if w_in > 0 and w_out > 0 else ''
+        self.out_tile.show_values('OUT' + loss, f'{w_out:.0f} g' if w_out > 0 else 'weigh', dropped and w_out <= 0)
 
     def guide_text(self) -> str:
         qmc = self.aw.qmc
@@ -296,13 +379,15 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         def target(key:str) -> float|None:
             v = ref.get(key) if bg else None
             return v if isinstance(v, (int, float)) else med.get(key)
-        setup = (f'{bean or "no bean set"} · {int(w)} g' if w > 0 else f'{bean or "no bean set"} · green weight not set')
+        # bean and weights are on the tiles below; the guide only says what is missing
+        missing = [what for what, ok in (('bean', bool(bean)), ('green weight', w > 0)) if not ok]
+        setup = f' · <span style="color:{ATTENTION}">set the {" and ".join(missing)}: tap BEAN</span>' if missing else ''
         bg_note = ''
         if bg is None:
-            bg_note = '<br><span style="color:#d9822b">No matching background: tap Roast setup.</span>'
+            bg_note = f'<br><span style="color:{ATTENTION}">No matching background: tap BEAN.</span>'
         elif normalize_bean(bg['bean']) != normalize_bean(bean) or (w > 0 and bg['weight_in_g'] and abs(bg['weight_in_g'] - w) > 0.1 * w):
-            bg_note = (f'<br><span style="color:#d9822b">Background {ref_name} is {bg["bean"]}, {int(bg["weight_in_g"] or 0)} g: '
-                'not like this roast. Tap Roast setup.</span>')
+            bg_note = (f'<br><span style="color:{ATTENTION}">Background {ref_name} is {bg["bean"]}, {int(bg["weight_in_g"] or 0)} g: '
+                'not like this roast. Tap BEAN.</span>')
 
         if not qmc.flagon:
             if qmc.timeindex[6] > 0 and qmc.timex:
@@ -314,18 +399,18 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
                 if qmc.weight[1]:
                     parts.append(f'loss {100 * (qmc.weight[0] - qmc.weight[1]) / qmc.weight[0]:.1f} %' if qmc.weight[0] else '')
                 return ' · '.join(p for p in parts if p)
-            return f'<b>Off</b> · {setup}{bg_note}'
+            return f'<b>Off</b>{setup}{bg_note}'
 
         t = self.roast_time()
         if not qmc.flagstart or qmc.timeindex[0] < 0:
             if et is None:
-                return f'<b>Preheat</b> · {setup}'
+                return f'<b>Preheat</b>{setup}'
             ready = et >= self.charge_et
             status = (f'<span style="color:#3fb950"><b>Ready to charge</b></span> (ET {et:.0f} ≥ {self.charge_et:.0f})' if ready
                 else f'Charge at ET {self.charge_et:.0f} · now <b>{et:.0f}</b> ({self.charge_et - et:.0f} to go)')
             ce = med.get('charge_et')
             hint = f'<br>Your {int(w)} g roasts charged at ET {ce:.0f} (median).' if ce and w > 0 else ''
-            return f'<b>Preheat</b> · {setup}<br>{status}{hint}{bg_note}'
+            return f'<b>Preheat</b>{setup}<br>{status}{hint}{bg_note}'
 
         dry, fcs, drop = self.mark_time(1), self.mark_time(2), self.mark_time(6)
         ror_txt = f' · RoR {ror:.1f}' if ror is not None else ''
@@ -341,7 +426,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
                     self.aw.sendmessage(f'ET below {self.safe_et:.0f} °C: the roaster can be switched off')
             else:
                 cool = ''
-            weigh = '' if qmc.weight[1] else '<br>Weigh out when cool: tap <b>Weigh out</b>.'
+            weigh = '' if qmc.weight[1] else '<br>Weigh out when cool: tap <b>OUT</b>.'
             return f'{done}{cool}{weigh}'
         if fcs is not None and t is not None:
             dev = t - fcs
@@ -371,7 +456,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
                 delta = f' · BT {bt - bt_bg:+.0f} vs {ref_name}'
             return (f'<b>Drying</b> {mmss(t)}{ror_txt}{delta}'
                 + (f'<br>{ref_name}: DRY END at {mmss(ref_dry)}' if ref_dry else '') + '<br>Tap DRY END when the beans turn yellow and smell sweet.' + bg_note)
-        return f'<b>Recording</b> · {setup}{bg_note}'
+        return f'<b>Recording</b>{setup}{bg_note}'
 
     # ---- roast setup
 
@@ -517,7 +602,7 @@ class RoastSetupDialog(QDialog):
             qmc.beans = self.bean.currentText().strip()
             w = self.weight_value()
             if w > 0:
-                factor = {'g': 1.0, 'kg': 1000.0, 'lb': 453.592, 'oz': 28.3495}.get(str(qmc.weight[2]).lower(), 1.0)
+                factor = grams_per_unit(qmc.weight[2])
                 qmc.weight = (round(w / factor, 3), qmc.weight[1], qmc.weight[2]) # the weight is an immutable tuple
             item = self.backgrounds.currentItem()
             path = str(item.data(Qt.ItemDataRole.UserRole)) if item is not None else ''
@@ -639,7 +724,7 @@ class WeighOutDialog(QDialog):
         tare = self.number(self.tare) or 0.0
         self.assist.tare = tare
         QSettings().setValue('RoastAssist/tare', tare)
-        factor = {'g': 1.0, 'kg': 1000.0, 'lb': 453.592, 'oz': 28.3495}.get(str(qmc.weight[2]).lower(), 1.0)
+        factor = grams_per_unit(qmc.weight[2])
         qmc.weight = (qmc.weight[0], round(out / factor, 3), qmc.weight[2]) # the weight is an immutable tuple
         qmc.fileDirtySignal.emit()
         self.aw.sendmessage(f'Weight out {out:.0f} g')

@@ -267,7 +267,27 @@ class Driver:
             self.record('guide', phase=phase, text=plain[:300])
             self.check(not missing, f'guide during {phase} shows {needles}' + (f' (missing {missing})' if missing else ''))
 
+        # the BEAN / IN / OUT tiles: each expected text in 'caption value' of a tile, shown in full (not cut short)
+        def tiles_check(phase: str, *needles: str, attention: str | None = None) -> None:
+            from artisanlib import touch_controls
+            assist = touch_controls._instance.assist if touch_controls._instance is not None else None # noqa: SLF001
+            if assist is None:
+                self.check(False, f'tiles {phase}: touch panel present')
+                return
+            assist.refresh_tiles()
+            tiles = (assist.bean_tile, assist.in_tile, assist.out_tile)
+            shown = ' | '.join(f'{t.caption.text()} {t.full_value}' for t in tiles)
+            missing = [n for n in needles if n not in shown]
+            cut = [t.full_value for t in tiles if t.value.text() != t.full_value]
+            flagged = [t.objectName() for t in tiles if t.property('attention')]
+            self.record('tiles', phase=phase, shown=shown, cut=cut, attention=flagged)
+            self.check(not missing and not cut, f'tiles {phase} show {needles} ({shown})'
+                + (f' missing {missing}' if missing else '') + (f' cut short {cut}' if cut else ''))
+            if attention is not None:
+                self.check(flagged == ([attention] if attention else []), f'tiles {phase}: highlighted {flagged}, expected {attention or "none"}')
+
         def roast_setup() -> None:
+            tiles_check('before setup', 'IN set', 'OUT weigh')
             self.tap(self.panel('assist_setup'), 'Roast setup')
             QApplication.processEvents()
             dlg = aw.findChild(QDialog, 'assist_setup_dialog')
@@ -296,6 +316,7 @@ class Driver:
             grams = _re.search(r'(\d+) g', first.text()) if first is not None else None
             self.check(' India Natural ' in os.path.basename(suggested) and grams is not None and abs(int(grams.group(1)) - 1200) <= 120,
                 f"suggested background is an India Natural of the same batch size ({grams.group(1) if grams else '?'} g)")
+            tiles_check('after setup', 'BEAN · vs #', 'India Natural', 'IN 1200 g', 'OUT weigh', attention='')
 
         def weigh_out() -> None:
             self.tap(self.panel('assist_weigh'), 'Weigh out')
@@ -306,6 +327,7 @@ class Driver:
                 return
             layout_check('weigh-out dialog', dlg)
             tare, reading = dlg.findChild(QLineEdit, 'weigh_tare'), dlg.findChild(QLineEdit, 'weigh_reading')
+            self.check(tare is not None and tare.text() == '1246', f"cooling container defaults to 1246 g ({tare.text() if tare else None})")
             if tare is not None and reading is not None:
                 tare.setText('1246')
                 reading.setFocus()
@@ -316,6 +338,7 @@ class Driver:
             self.tap(dlg.findChild(QPushButton, 'weigh_apply'), 'weigh Apply')
             QApplication.processEvents()
             self.check(float(aw.qmc.weight[1]) == 1024.0, f'weight out = reading - container ({aw.qmc.weight[1]})')
+            tiles_check('after weigh-out', 'OUT · 14.7 % 1024 g', 'IN 1200 g', attention='')
 
         # ---- Claude panel, against dev/fake_claude_api.py (ANTHROPIC_BASE_URL set by e2e-test.ps1)
         from PyQt6.QtWidgets import QTextBrowser
@@ -428,7 +451,7 @@ class Driver:
             ('right element off', once(lambda: self.tap(self.panel('assist_element_R'), 'element R'))),
             ('ON', once(lambda: self.tap(aw.buttonONOFF, 'ON'))),
             ('sampling', wait(5)),
-            ('guide preheat', once(lambda: guide_check('preheat', 'India Natural', '1200 g', 'ET'))),
+            ('guide preheat', once(lambda: guide_check('preheat', 'Preheat', 'ET'))),
             ('START', once(lambda: self.tap(aw.buttonSTARTSTOP, 'START', touch=False))),
             ('recording', wait(6)),
             ('fan on', once(lambda: self.tap(self.extra_button('Fan On'), 'Fan On'))),
@@ -474,6 +497,7 @@ class Driver:
             ('cooling', wait(6)),
             ('dialogs', once(dismiss_dialogs)),
             ('guide after drop', once(lambda: guide_check('cool-down', 'Dropped', 'development', 'Weigh out'))),
+            ('tiles after drop', once(lambda: tiles_check('after drop', 'OUT weigh', attention='assist_weigh'))),
             ('weigh out', once(weigh_out)),
             ('panel drum stop', once(lambda: self.panel_taps(['touch_drum_off'], 'drum slider', 30, [(22, 8192, 1)]))),
             ('drum off', once(lambda: self.tap(self.extra_button('Drum Off'), 'Drum Off'))),
