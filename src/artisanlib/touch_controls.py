@@ -368,12 +368,12 @@ class TouchControls(QObject): # pyright: ignore[reportGeneralTypeIssues]
             if config['slider'] < len(aw.eventsliderdescriptionscale) and aw.eventsliderfactors[config['slider']] == 10:
                 aw.eventsliderdescriptionscale[config['slider']] = config['label_scale']
 
-        # the heating element buttons in the empty middle of the top row (the toolbar, then the phase LCDs and
-        # ON/START); the row grows to fit touch-sized buttons
+        # the heating element buttons in the empty part of the top row, right after the toolbar: anchored there, they
+        # don't move when the phase LCDs further right change width (as they do with START); the row grows to fit
+        # touch-sized buttons
         index = aw.level1layout.indexOf(aw.phasesLCDsFrame)
-        if index >= 0:
-            aw.level1layout.insertWidget(index, self.assist.elements_bar)
-            aw.level1layout.insertStretch(index + 1)
+        if index >= 1: # after the stretch before the phase LCDs
+            aw.level1layout.insertWidget(index - 1, self.assist.elements_bar)
             aw.level1frame.setFixedHeight(max(aw.level1frame.minimumHeight(), int(round(9 * mm)) + 7 + 12 + 6)) # + the row's margins
 
         # part of the main layout, right of the LCDs (a dock widget would be placed by the window state restored before)

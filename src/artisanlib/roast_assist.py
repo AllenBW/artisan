@@ -189,7 +189,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             QPushButton:checked {{ background: rgba(224,90,60,0.9); color: white; border-color: rgba(224,90,60,1); }}
             """)
         elements_row = QHBoxLayout(self.elements_bar)
-        elements_row.setContentsMargins(0, 0, 0, 0)
+        elements_row.setContentsMargins(int(round(12 * mm)), 0, 0, 0) # clear of the toolbar icons
         elements_row.setSpacing(int(round(1.5 * mm)))
         elements_row.addWidget(QLabel('ELEMENTS'))
         for i, (short, name) in enumerate(ELEMENTS):
