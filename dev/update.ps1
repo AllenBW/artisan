@@ -8,14 +8,16 @@
         r\<commit>\          a git worktree of this repository at that commit, with its own .venv
         current.txt          the release the shortcut starts
         previous.txt         the release before it (-Rollback goes back to it)
-        Artisan-FZ94.cmd     the launcher (settings profile Artisan-FZ94, MCP server, logs and MODBUS trace on)
+        Artisan-FZ94.cmd     the launcher (settings profile Artisan-FZ94, MCP server, logs, MODBUS trace and
+                             screen recording on)
 
     Steps: fetch (with -Pull), check out the commit as a new worktree, install its requirements with uv, run
     dev\e2e-test.ps1 from the release (normal, then with faults unless -Quick) using a copy of the FZ94 settings
     pointed at the simulator, and switch current.txt only if every check passed. The roaster is never contacted.
 
-    The first update creates the settings profile Artisan-FZ94 as a copy of Artisan-Dev (registry backup first) and a
-    desktop shortcut "Artisan FZ94". The installed Artisan and its settings are not touched.
+    The first update creates the settings profile Artisan-FZ94 as a copy of Artisan-Dev (registry backup first) and the
+    desktop shortcuts "Artisan FZ94" and "Update Artisan FZ94" (this script with -Pull). The installed Artisan and its
+    settings are not touched.
 
     The tests take over the screen for about 10 minutes (about 5 with -Quick): don't use the computer meanwhile.
 
@@ -145,7 +147,7 @@ $launcher = Join-Path $root 'Artisan-FZ94.cmd'
 @echo off
 rem Starts the current release of the roaster build (see dev\update.ps1 in the repository).
 set /p REL=<"%LOCALAPPDATA%\artisan-fork\current.txt"
-start "Artisan FZ94" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REL%\dev\run-dev.ps1" -SettingsProfile $SettingsProfile -Venv "%REL%\.venv"
+start "Artisan FZ94" /min powershell -NoProfile -ExecutionPolicy Bypass -File "%REL%\dev\run-dev.ps1" -SettingsProfile $SettingsProfile -Venv "%REL%\.venv" -Record
 "@ | Set-Content $launcher -Encoding ascii
 
 $desktop = [Environment]::GetFolderPath('Desktop')
@@ -160,6 +162,18 @@ if (-not (Test-Path $lnk)) {
     $s.Description = 'Artisan, roaster build (current tested release)'
     $s.Save()
     Write-Host "Desktop shortcut: $lnk"
+}
+# one tap to get the newest pushed work onto the roaster: the window stays open to show how it went
+$updateLnk = Join-Path $desktop 'Update Artisan FZ94.lnk'
+if (-not (Test-Path $updateLnk)) {
+    $shell = New-Object -ComObject WScript.Shell
+    $s = $shell.CreateShortcut($updateLnk)
+    $s.TargetPath = (Get-Command powershell).Source
+    $s.Arguments = "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Pull"
+    $s.WorkingDirectory = $repo
+    $s.Description = 'Builds, tests and installs the newest pushed roaster build (about 10 minutes)'
+    $s.Save()
+    Write-Host "Desktop shortcut: $updateLnk"
 }
 
 $keepDirs = @((Read-Release $currentFile), (Read-Release $previousFile))

@@ -5,8 +5,8 @@ Windows setup and workflow-analysis tools for this fork.
 | Script | What it does |
 |---|---|
 | `setup-dev.ps1` | Installs Git, uv and FFmpeg with winget, then Python 3.14 (the version the official CI uses) and all dependencies into `%LOCALAPPDATA%\artisan-dev\.venv`. The environment is kept outside OneDrive so packages aren't synced. Safe to re-run. |
-| `run-dev.ps1` | Runs Artisan from source with its own settings (`Artisan-Dev`) and the interaction log on. Use `-CopySettings` on the first run to start from a copy of the installed Artisan's settings (a registry backup is made first). Close the installed Artisan before starting it. |
-| `record-session.ps1` | Records the screen (and the mic, for narration) to `~/artisan-sessions` with a clock burned into the corner. Press `q` to stop. Use `-NoAudio` for screen only. |
+| `run-dev.ps1` | Runs Artisan from source with its own settings (`Artisan-Dev`) and the interaction log on; `-Record` also records the screen for as long as Artisan is open. Use `-CopySettings` on the first run to start from a copy of the installed Artisan's settings (a registry backup is made first). Close the installed Artisan before starting it. |
+| `record-session.ps1` | Records the screen (and the mic, for narration) to `~/artisan-sessions` with a clock burned into the corner. Press `q` to stop. Use `-NoAudio` for screen only. Started automatically by the **Artisan FZ94** shortcut (`run-dev.ps1 -Record`). |
 | `backup-original.ps1` | Preserves the installed Artisan in full (program folder, its registry settings, app data, roast folder) to `~/artisan-backups/original-<stamp>` with a SHA-256 manifest, and verifies every file. |
 | `restore-original.ps1` | Restores that backup. Defaults to a dry run; use `-Apply` to restore, and `-Program` (elevated) to also restore the program folder. Never deletes roast files. |
 | `fz94_sim.py` | A simulated FZ94: a Modbus TCP server with the roaster's real slave IDs and registers, playing the median logged roast curve. Drives ramp to their setpoints and the heat limit caps ET. |
@@ -17,6 +17,10 @@ Windows setup and workflow-analysis tools for this fork.
 | `session_frames.py` | Turns a recording into contact sheets, plus frames at every tap, mark or slider move. Events come from the interaction log and/or the roast's `.alog` file, so it works with the installed 3.1.0 too. |
 
 ## Recording a roast for analysis
+
+The **Artisan FZ94** shortcut captures everything by itself: the interaction log, the Modbus trace and the screen recording (with the microphone, for narration) start with Artisan and stop when it's closed. Artisan's message line says so at startup, with the build it's running, e.g. "Build 1a2b3c4d of 2026-11-24 20:10, interaction log and MODBUS trace on, screen recording on". If the recording can't start, a warning pops up and Artisan starts without it.
+
+By hand (the dev build, or the installed Artisan):
 
 ```powershell
 .\dev\record-session.ps1                       # start before the roast, press q after
@@ -58,6 +62,17 @@ Text typed into input fields is never recorded, only the fact that typing happen
 - **Roast setup** (tap BEAN or IN): name, bean, green weight, and the background roast. The best match (same bean, ±10 % batch size, newest) is listed first; it comes from an index of the roast folder.
 - **Weigh out** (tap OUT): type the scale reading on the keypad; the stored cooling-container weight (default 1,246 g) is subtracted, and the loss % is checked.
 - Settings: QSettings group `RoastAssist` (chargeET, chargeFan, chargeDrum, dtrMin, dtrMax, safeET, tare, historyFolder).
+
+## Roast level and countdown
+
+Config → Phases → **Roast Level** (off by default) names the roast level reached so far (Half City, City, City+, Full City) and counts down to the next one.
+
+- **Where:** a coloured badge right of the phase LCDs with the countdown above it ("»City+ 0:34"), and a line in the guide during development ("City · City+ at 207 °C in ~0:34"). The countdown turns orange in the last 30 s.
+- **Level:** taken from the highest bean temperature estimate since the turning point, so it never goes back.
+- **Estimate:** BT plus the **Offset**. Optionally a share of ET and of one extra channel (e.g. the exhaust) is blended in; both are air temperatures and read above the beans, so they're best left at 0 %.
+- **Countdown:** a straight line through the last 60 s of the estimate, extended to the next limit. The controllers report whole degrees, so expect it to be right to within about 5 s.
+- **Limits:** the defaults are the bean temperatures of Sweet Maria's pictorial guide (City 219 °C, City+ 224 °C, Full City 230–234 °C; Half City from 213 °C), where first crack begins at 205 °C.
+- **Offset for this roaster:** the FZ94's bean probe reads first crack at a median 188 °C, 17 °C lower. With Offset 0 a typical roast (drop at 204 °C) never reaches Half City; **Offset 17** puts City at BT 202, City+ at 207 and Full City at 213. Check it against the colour of a few roasts and adjust.
 
 ## Claude assistant (MCP server)
 
@@ -111,7 +126,9 @@ Run `setup-roast-archive.ps1` once. After that, every save and tasting copies ne
 .\dev\update.ps1 -Rollback  # back to the previous release
 ```
 
-- **Which build:** the **Artisan FZ94** desktop shortcut always starts the last release that passed the tests.
+- **From the desktop:** the **Update Artisan FZ94** shortcut runs `update.ps1 -Pull` and leaves the window open to show how it went.
+- **Only pushed commits are released:** work that is not committed and pushed to this branch never reaches the roaster.
+- **Which build:** the **Artisan FZ94** desktop shortcut always starts the last release that passed the tests, and Artisan's message line names it at startup.
 - **Settings:** the roaster build uses the settings profile `Artisan-FZ94`, created from `Artisan-Dev` on the first update. The tests run with a copy of it, pointed at the simulator.
 - **Failed tests:** nothing changes.
 - **Development:** carries on in this checkout with `run-dev.ps1`, unaffected.
