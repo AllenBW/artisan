@@ -5,7 +5,8 @@
 #    (charge readiness, phase times against the background roast, first crack ETA, live development time and
 #    ratio against the drop window, the roast level with the countdown to the next one, cool-down to a safe ET)
 #  - left/center/right heating element buttons in the window's top bar: each switch is logged as an event, the on
-#    periods are drawn as lanes on the graph (artisanlib/element_lanes.py); all three start on with every roast
+#    periods are drawn as lanes on the graph (artisanlib/element_lanes.py); all three start on with every roast, and
+#    the guide says so if one is off before the beans go in
 #  - a one-tap charge preset for fan and drum
 #  - always visible tiles for the bean, the green weight and the roasted weight (with the weight loss); tapping them
 #    opens the roast setup and the weigh-out
@@ -30,6 +31,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import os
+import time
 import bisect
 import logging
 import threading
@@ -39,11 +41,11 @@ from collections.abc import Callable
 from PyQt6.QtCore import Qt, QObject, QSettings, pyqtSignal
 from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (QApplication, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QDialog, QComboBox, QLineEdit, QListWidget, QListWidgetItem, QSizePolicy)
+    QDialog, QComboBox, QLineEdit, QListWidget, QListWidgetItem, QSizePolicy, QButtonGroup)
 
 from artisanlib.element_lanes import ELEMENTS, ELEMENTS_EVENT_TYPE, ElementLanes, state_text
 from artisanlib.roast_history import RoastHistory, normalize_bean
-from artisanlib.roast_level import ROAST_LEVEL_ETA_WARN
+from artisanlib.roast_level import ROAST_LEVELS, ROAST_LEVEL_ETA_WARN, ROAST_LEVEL_ETA_SHOWN
 from artisanlib.tasting_log import TastingLog, TastingDialog, default_path as tasting_log_path
 from artisanlib.util import getDataDirectory
 
@@ -151,7 +153,7 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         s.endGroup()
         # the roaster is never run without all three elements on at the start: every roast starts with them on
         self.elements:list[bool] = [True] * len(ELEMENTS)
-        self.charge_recorded = False # element state recorded at CHARGE for the current roast
+        self.start_recorded = False # element state recorded at the start of the current recording
         self.cooldown_announced = False
         self.last_flagstart = False
         self.last_flagon = False
@@ -168,6 +170,10 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
         if len(aw.qmc.etypes) > ELEMENTS_EVENT_TYPE and aw.qmc.etypes[ELEMENTS_EVENT_TYPE] in {'Damper', ''}:
             aw.qmc.etypes[ELEMENTS_EVENT_TYPE] = 'Elements'
+        # the lanes show the elements: Artisan's own drawing of these events (a step line of the number of elements on,
+        # and its labels) would say the same again across the middle of the graph
+        if len(aw.qmc.showEtypes) > ELEMENTS_EVENT_TYPE:
+            aw.qmc.showEtypes[ELEMENTS_EVENT_TYPE] = False
 
         h = int(round(9 * mm)) # touch target height
         self.guide = QLabel()
@@ -176,7 +182,8 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
         self.guide.setTextFormat(Qt.TextFormat.RichText)
         self.guide.setMinimumHeight(int(round(16 * mm)))
         self.guide.setStyleSheet(f'QLabel#assist_guide {{ font-size: {int(h * 0.36)}px; padding: {int(mm)}px; border-radius: 8px;'
-            ' border: 1px solid rgba(128,128,128,0.35); background: rgba(128,128,128,0.10); }')
+            ' border: 1px solid rgba(128,128,128,0.35); background: rgba(128,128,128,0.10); }'
+            f' QLabel#assist_guide[flash="true"] {{ border: 1px solid {ATTENTION}; background: {ATTENTION}; color: white; }}')
 
         # heating elements: a bar for the window's top row (placed by the touch panel), each button shows how long
         # its element has been on or off
@@ -288,8 +295,8 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     def record_elements(self, description:str) -> None:
         qmc = self.aw.qmc
-        if not qmc.flagstart:
-            return # recorded with the roast at CHARGE
+        if not qmc.flagstart or not qmc.timex:
+            return # recorded with the first reading of the recording
         try:
             value = 10 * sum(self.elements) # 0..30 on the event scale: the number of elements on
             qmc.EventRecordAction(extraevent=1, eventtype=ELEMENTS_EVENT_TYPE,
@@ -374,22 +381,39 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     # ---- guide
 
-    # 'City · City+ at 207 °C in ~0:40': the roast level reached and the countdown to the next one, once it is less than
-    # five minutes away (Config > Phases > Roast Level); empty if the indicator is off or there is nothing to say yet
+    # The roast level reached and the countdown to the next one, once it is less than five minutes away
+    # (Config > Phases > Roast Level): 'City · City+ at 204 °C in ~0:40'.
+    # With a target level (roast setup): 'City → City+ at 204 °C in ~0:40' up to it, 'City+: DROP · Full City in ~0:25'
+    # within it and 'Full City: past the target City+' beyond it.
+    # Empty if the indicator is off or there is nothing to say yet
     def roast_level_text(self) -> str:
         qmc = self.aw.qmc
         if not getattr(qmc, 'roastLevelFlag', False):
             return ''
         try:
-            level, _, nxt, secs = self.aw.roastLevelStatus()
-            parts = [f'<b>{self.aw.roastLevelName(level)}</b>'] if level is not None else []
-            if nxt is not None and secs is not None and secs <= 300:
+            aw = self.aw
+            level, _, nxt, secs = aw.roastLevelStatus()
+            target = aw.roastLevelTargetIndex()
+            now = f'<b>{aw.roastLevelName(level)}</b>' if level is not None else ''
+            def ahead(i:int, s:float|None) -> str:
+                if s is None or s > ROAST_LEVEL_ETA_SHOWN:
+                    return ''
                 # the limit as the BT to watch for, which it only is while BT alone makes the estimate
                 bt_only = qmc.roastLevelETweight == 0 and qmc.roastLevelXweight == 0
-                at = f' at {qmc.roastLevelLimits[nxt] - qmc.roastLevelOffset:.0f} °{qmc.mode}' if bt_only else ''
-                style = f'color:{ATTENTION}' if secs <= ROAST_LEVEL_ETA_WARN else ''
-                parts.append(f'{self.aw.roastLevelName(nxt)}{at} in <span style="{style}"><b>~{mmss(secs)}</b></span>')
-            return ' · '.join(parts)
+                at = f' at {qmc.roastLevelLimits[i] - qmc.roastLevelOffset:.0f} °{qmc.mode}' if bt_only else ''
+                style = f'color:{ATTENTION}' if s <= ROAST_LEVEL_ETA_WARN else ''
+                return f'{aw.roastLevelName(i)}{at} in <span style="{style}"><b>~{mmss(s)}</b></span>'
+            if target is not None and nxt is not None and (level is None or level < target):
+                to_target = ahead(target, aw.roastLevelSeconds(target))
+                if not to_target:
+                    return now
+                return f'{now} → {to_target}' if now else f'Target {to_target}'
+            if target is not None and level == target and qmc.timeindex[6] <= 0:
+                after = ahead(nxt, secs) if nxt is not None else ''
+                return f'<span style="color:#3fb950"><b>{aw.roastLevelName(level)}: DROP</b></span>' + (f' · {after}' if after else '')
+            if target is not None and level is not None and level > target:
+                return f'<span style="color:{ATTENTION}">{now}: past the target {aw.roastLevelName(target)}</span>'
+            return ' · '.join(p for p in (now, ahead(nxt, secs) if nxt is not None else '') if p)
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
             return ''
@@ -400,17 +424,28 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             self.last_flagon = qmc.flagon
             if qmc.flagon: # a new roast session: the elements are all switched on to preheat
                 self.set_elements([True] * len(ELEMENTS))
-        # element state goes into the roast at CHARGE (toggles before it are only remembered)
         if qmc.flagstart != self.last_flagstart:
             self.last_flagstart = qmc.flagstart
-            self.charge_recorded = False
+            self.start_recorded = False
             self.cooldown_announced = False
-        if qmc.flagstart and not self.charge_recorded and qmc.timeindex[0] > -1:
-            self.charge_recorded = True
-            self.record_elements(f'at charge: {self.element_state_text()}')
+            if qmc.flagstart: # every recording starts with all three on, also a second one without OFF and ON in between
+                self.set_elements([True] * len(ELEMENTS))
+        # the element state goes into the roast with its first reading, so that the lanes cover the whole recording
+        # (a tap from then on is an event of its own)
+        if qmc.flagstart and not self.start_recorded and qmc.timex:
+            self.start_recorded = True
+            self.record_elements(f'at start: {self.element_state_text()}')
         self.update_element_buttons()
         self.refresh_tiles()
         self.guide.setText(self.guide_text())
+        # the guide blinks for some seconds after a roast level alert, like the badge in the top row
+        flash = time.monotonic() < getattr(self.aw, 'roastLevelFlashUntil', 0.) and not bool(self.guide.property('flash'))
+        if bool(self.guide.property('flash')) != flash:
+            self.guide.setProperty('flash', flash)
+            style = self.guide.style()
+            if style is not None:
+                style.unpolish(self.guide)
+                style.polish(self.guide)
 
     def refresh_tiles(self) -> None:
         qmc = self.aw.qmc
@@ -459,6 +494,11 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
         t = self.roast_time()
         if not qmc.flagstart or qmc.timeindex[0] < 0:
+            # the roaster is charged with all three elements on: one shown off is a slip of the finger, or of the switch
+            off = [name for (_, name), on in zip(ELEMENTS, self.elements, strict=True) if not on]
+            if off:
+                setup += (f'<br><span style="color:{ATTENTION}"><b>{" and ".join(off)} element{"s" if len(off) > 1 else ""} off</b>: '
+                    'all three are on to charge. Switch on, then tap the button.</span>')
             if et is None:
                 return f'<b>Preheat</b>{setup}'
             ready = et >= self.charge_et
@@ -567,7 +607,7 @@ class RoastSetupDialog(QDialog):
         self.aw = aw
         self.assist = assist
         self.setWindowTitle(QApplication.translate('Form Caption', 'Roast setup'))
-        self.setStyleSheet(touch_style(mm))
+        self.setStyleSheet(touch_style(mm) + ' QPushButton:checked { background: #2f6fb0; color: white; border: 1px solid #2f6fb0; }')
         qmc = aw.qmc
         self.name = QLineEdit(str(qmc.title or ''))
         self.name.setObjectName('setup_name')
@@ -597,6 +637,16 @@ class RoastSetupDialog(QDialog):
         self.backgrounds.setObjectName('setup_backgrounds')
         self.bean.currentTextChanged.connect(lambda _: self.update_backgrounds())
         self.weight.textChanged.connect(lambda _: self.update_backgrounds())
+        # the roast level to drop at: the guide counts down to it, and an alert is given ahead of it and once it is reached
+        self.targets = QButtonGroup(self)
+        trow = QHBoxLayout()
+        for i, text in enumerate(['None', *ROAST_LEVELS]):
+            b = QPushButton(text)
+            b.setObjectName('setup_target_none' if i == 0 else f'setup_target_{i - 1}')
+            b.setCheckable(True)
+            b.setChecked(i - 1 == (aw.roastLevelTargetIndex() if aw.roastLevelTargetIndex() is not None else -1))
+            self.targets.addButton(b, i - 1)
+            trow.addWidget(b)
         apply = QPushButton(QApplication.translate('Button', 'Apply'))
         apply.setObjectName('setup_apply')
         apply.setDefault(True)
@@ -614,6 +664,8 @@ class RoastSetupDialog(QDialog):
         layout.addWidget(QLabel('Green weight (g)'))
         layout.addLayout(wrow)
         layout.addLayout(prow)
+        layout.addWidget(QLabel('Drop at (target roast level)'))
+        layout.addLayout(trow)
         layout.addWidget(QLabel('Background roast (best match first: same bean and batch size)'))
         layout.addWidget(self.backgrounds, 1)
         layout.addLayout(buttons)
@@ -671,8 +723,12 @@ class RoastSetupDialog(QDialog):
             elif item is not None:
                 self.aw.deleteBackground()
                 qmc.redraw(recomputeAllDeltas=False)
+            qmc.roastLevelTarget = self.targets.checkedId()
+            self.aw.updateRoastLevel()
             qmc.fileDirtySignal.emit()
-            self.aw.sendmessage(f'Roast setup: {qmc.beans}, {int(w)} g' + (f', background {os.path.basename(path)}' if path else ''))
+            target = self.aw.roastLevelTargetIndex()
+            self.aw.sendmessage(f'Roast setup: {qmc.beans}, {int(w)} g' + (f', background {os.path.basename(path)}' if path else '')
+                + (f', drop at {self.aw.roastLevelName(target)}' if target is not None else ''))
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
         self.accept()

@@ -3,9 +3,17 @@
 # The heating elements (left, center, right) of the FZ94: switched on and off by hand, with no intensity setting.
 # Each change is logged as an event of type 'Elements' (event type 2, Artisan's unused 'Damper'): its value is
 # 10 x the number of elements on, its description names the ones on ("Left off (elements C+R on)",
-# "at charge: elements L+C+R on", "all elements off"). From those events this module works out when each element
-# was on, and draws one lane per element along the top of the graph: a bar while the element is on. Bars still
-# open grow with the roast, drawn on each live update like Artisan's time guide.
+# "at start: elements L+C+R on", "all elements off"). From those events this module works out when each element
+# was on, and draws one lane per element on the graph: a faint track across the graph with a bar while the element is
+# on, so that a gap in the bars reads as off. Bars still open grow with the roast, drawn on each live update like
+# Artisan's time guide.
+#
+# While recording the lanes run along the top of the graph, which is free then. Afterwards Artisan writes the phase
+# statistics there (times and percentages, the phases bar, a line of temperatures): the lanes then sit right below
+# them, time-aligned with the phases bar like further rows of it. The bars are drawn below the curves, never over them.
+#
+# The events themselves are not shown on the graph the way Artisan shows events (a step line of the number of elements
+# on, with its labels): the lanes say the same and more.
 
 # LICENSE
 # This program or module is free software: you can redistribute it and/or modify
@@ -38,9 +46,11 @@ _log: Final[logging.Logger] = logging.getLogger(__name__)
 ELEMENTS: Final[list[tuple[str, str]]] = [('L', 'Left'), ('C', 'Center'), ('R', 'Right')]
 ELEMENTS_EVENT_TYPE: Final[int] = 2 # the event type logged for the heating elements (Artisan's unused 'Damper')
 ON_COLOR: Final[str] = '#e05a3c'
-LANE_TOP: Final[float] = 0.975 # top of the first lane, in axes fractions
+TRACK_COLOR: Final[str] = '#808080'
+LANE_TOP: Final[float] = 0.975 # top of the first lane while recording, in axes fractions
 LANE_HEIGHT: Final[float] = 0.018
 LANE_GAP: Final[float] = 0.007
+LANE_ZORDER: Final[float] = 1.5 # above the phase watermarks, below the curves and their labels
 
 STATE: Final = re.compile(r'elements ([LCR](?:\+[LCR])*) on')
 
@@ -94,7 +104,10 @@ def summary(periods:list[list[Period]], charge:float, end:float|None) -> dict[st
     for (_, name), ps in zip(ELEMENTS, periods, strict=True):
         rows = []
         total = 0.0
-        for start, off in ps:
+        for on, off in ps:
+            if off is not None and off <= charge:
+                continue # over before the beans went in
+            start = max(on, charge) # on since the recording started: counted from CHARGE
             rows.append({'on': round(start - charge, 1), 'off': round(off - charge, 1) if off is not None else None})
             stop = off if off is not None else end
             if stop is not None:
@@ -109,6 +122,7 @@ class ElementLanes:
     def __init__(self, qmc:'tgraphcanvas') -> None:
         self.qmc = qmc
         self.artists:list[Artist] = []
+        self.bars:list[Rectangle] = [] # one per on period
         self.open_bars:list[tuple[Rectangle, float]] = [] # (bar, start) of the elements still on while recording
         qmc.redraw_hooks.append(self.draw)
         qmc.live_hooks.append(self.draw_live)
@@ -127,8 +141,19 @@ class ElementLanes:
         self.draw()
         self.qmc.updateBackground()
 
+    # top of the first lane, in axes fractions
+    def lane_top(self) -> float:
+        qmc = self.qmc
+        if qmc.flagstart:
+            return LANE_TOP
+        # below the phase statistics, placed as in tgraphcanvas.writestatistics(): the phases bar 8% below the top of the
+        # graph (13% with the legend on top), the line of text under it 3.5 bar heights lower (2.5 in Fahrenheit), a bar
+        # height being 1/70 of the graph
+        text = (0.13 if qmc.legendloc in {1, 2, 9} else 0.08) + (3.5 if qmc.mode == 'C' else 2.5) / 70
+        return 1 - text - 0.012
+
     def draw(self) -> None:
-        self.artists, self.open_bars = [], []
+        self.artists, self.bars, self.open_bars = [], [], []
         ax = self.qmc.ax
         if ax is None or not self.qmc.timex:
             return
@@ -138,19 +163,26 @@ class ElementLanes:
         trans = blended_transform_factory(ax.transData, ax.transAxes)
         recording = self.qmc.flagstart
         last = self.qmc.timex[-1]
+        top = self.lane_top()
         for k, (short, _) in enumerate(ELEMENTS):
-            y = LANE_TOP - LANE_HEIGHT - k * (LANE_HEIGHT + LANE_GAP)
+            y = top - LANE_HEIGHT - k * (LANE_HEIGHT + LANE_GAP)
             label = ax.text(0.003, y + LANE_HEIGHT / 2, short, transform=ax.transAxes, ha='left', va='center',
                 fontsize='x-small', fontweight='bold', color=ON_COLOR, zorder=30)
             self.artists.append(label)
+            # the track: without it an element that is off would look the same as no lane at all
+            track = Rectangle((0, y), 1, LANE_HEIGHT, transform=ax.transAxes, facecolor=TRACK_COLOR, edgecolor='none', alpha=0.13,
+                zorder=LANE_ZORDER - 0.1)
+            ax.add_patch(track)
+            self.artists.append(track)
             for start, end in periods[k]:
                 bar = Rectangle((start, y), (end if end is not None else last) - start, LANE_HEIGHT, transform=trans,
-                    facecolor=ON_COLOR, edgecolor='none', alpha=0.75, zorder=30)
+                    facecolor=ON_COLOR, edgecolor='none', alpha=0.75, zorder=LANE_ZORDER)
                 if end is None and recording:
                     bar.set_animated(True) # grows on each live update, not cached in the background
                     self.open_bars.append((bar, start))
                 ax.add_patch(bar)
                 self.artists.append(bar)
+                self.bars.append(bar)
 
     def draw_live(self) -> None:
         ax = self.qmc.ax

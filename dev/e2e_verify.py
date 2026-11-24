@@ -307,9 +307,10 @@ def main() -> None:
             element_events = [(round(timex[profile['specialevents'][n]] - (timex[profile['timeindex'][0]] if profile['timeindex'][0] > -1 else 0)),
                 strings[n]) for n in range(len(profile.get('specialevents', []))) if profile['specialeventstype'][n] == 2]
             stats['element_events'] = element_events
-            # every roast starts with all three on (a toggle before ON is reset), then right off after DRY and on again
-            rep.check('roast assist', 'all elements on at CHARGE', any(s == 'at charge: elements L+C+R on' for _, s in element_events),
-                str(element_events))
+            # every roast starts with all three on (a toggle before ON is reset), logged with the first reading of the
+            # recording, before CHARGE; then right off after DRY and on again
+            rep.check('roast assist', 'all elements on from the start of the recording',
+                bool(element_events) and element_events[0][1] == 'at start: elements L+C+R on' and element_events[0][0] <= 0, str(element_events))
             offs = [t for t, s in element_events if s.startswith('Right off')]
             ons = [t for t, s in element_events if s.startswith('Right on')]
             rep.check('roast assist', 'right element off and on again during the roast recorded', bool(offs and ons and offs[0] < ons[-1]),

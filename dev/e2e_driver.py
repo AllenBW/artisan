@@ -31,6 +31,7 @@ from pymodbus.client import ModbusTcpClient # noqa: E402
 
 # roast time (s) of the scripted actions, matching the simulator's curve (DRY 329 s, FCs 540 s, DROP 680 s)
 DRY_AT, FCS_AT, DROP_AT = 329, 540, 680
+TARGET_LEVEL = 2 # the roast level to drop at, set in the roast setup: City+ (index into artisanlib.roast_level.ROAST_LEVELS)
 
 
 class Driver:
@@ -212,7 +213,7 @@ class Driver:
             if periods_per_element is not None:
                 periods = assist.lanes.periods()
                 counts = [len(p) for p in periods]
-                bars = sum(1 for a in assist.lanes.artists if type(a).__name__ == 'Rectangle')
+                bars = len(assist.lanes.bars)
                 self.record('element_periods', phase=phase, periods=[[(round(a, 1), None if b is None else round(b, 1)) for a, b in p] for p in periods], bars=bars)
                 self.check(counts == periods_per_element and bars == sum(counts),
                     f'elements {phase}: on periods per element {counts} (expected {periods_per_element}), {bars} bars on the graph')
@@ -339,6 +340,7 @@ class Driver:
                 bean.setCurrentText('India Natural')
                 self.record('set_bean', value='India Natural')
             self.tap(dlg.findChild(QPushButton, 'setup_weight_1200'), 'setup 1200 g')
+            self.tap(dlg.findChild(QPushButton, f'setup_target_{TARGET_LEVEL}'), 'setup target City+')
             QApplication.processEvents()
             backgrounds = dlg.findChild(QListWidget, 'setup_backgrounds')
             first = backgrounds.item(0) if backgrounds is not None and backgrounds.count() else None
@@ -348,6 +350,7 @@ class Driver:
             QApplication.processEvents()
             w = aw.qmc.weight
             self.check(str(aw.qmc.beans) == 'India Natural' and float(w[0]) == 1200.0, f'roast setup set bean and weight ({aw.qmc.beans}, {w[0]})')
+            self.check(aw.qmc.roastLevelTarget == TARGET_LEVEL, f'roast setup set the target roast level to City+ ({aw.qmc.roastLevelTarget})')
             bg = str(getattr(aw.qmc, 'backgroundpath', '') or '')
             self.check(bool(suggested) and os.path.normcase(bg) == os.path.normcase(suggested),
                 f'suggested background loaded ({os.path.basename(suggested)} -> {os.path.basename(bg)})')
@@ -356,6 +359,33 @@ class Driver:
             self.check(' India Natural ' in os.path.basename(suggested) and grams is not None and abs(int(grams.group(1)) - 1200) <= 120,
                 f"suggested background is an India Natural of the same batch size ({grams.group(1) if grams else '?'} g)")
             tiles_check('after setup', 'BEAN · vs #', 'India Natural', 'IN 1200 g', 'OUT weigh', attention='')
+
+        # the roast level: the level named for the BT read, in the guide too, and the alerts for the target level set in the
+        # roast setup. The levels expected are those of the default limits (BT 195, 200, 204, 209, 212 C); with other limits
+        # in the settings tested only what is shown is checked against itself
+        def roast_level_check(phase: str, expected: tuple[int, ...], in_guide: bool = True) -> None:
+            if not qmc.roastLevelFlag:
+                self.record('roast_level_off', phase=phase)
+                return
+            level, estimate, nxt, secs = aw.roastLevelStatus()
+            to_target = aw.roastLevelSeconds(TARGET_LEVEL)
+            alerts = sorted(aw.roastLevelAlerted)
+            defaults = (list(qmc.roastLevelLimits) == [195, 200, 204, 209, 212] and qmc.roastLevelOffset == 0
+                and qmc.roastLevelETweight == 0 and qmc.roastLevelXweight == 0)
+            self.record('roast_level', phase=phase, bt=qmc.temp2[-1] if qmc.temp2 else None, level=level, estimate=estimate, next=nxt,
+                seconds=secs, seconds_to_target=to_target, alerts=alerts, limits=list(qmc.roastLevelLimits), defaults=defaults)
+            names = ' or '.join(aw.roastLevelName(i) for i in expected)
+            if defaults:
+                self.check(level in expected, f'roast level {phase}: {aw.roastLevelName(level) if level is not None else None} at BT {estimate} (expected {names})')
+            if level is not None and in_guide:
+                guide_check(f'roast level {phase}', aw.roastLevelName(level))
+            # ahead of the target: an alert once the countdown is within 30 s; from the target on: the alert to drop
+            if level is not None and level >= TARGET_LEVEL:
+                self.check(('reached', TARGET_LEVEL) in aw.roastLevelAlerted, f'roast level {phase}: alert given on reaching the target ({alerts})')
+            else:
+                self.check(('reached', TARGET_LEVEL) not in aw.roastLevelAlerted, f'roast level {phase}: no alert for a target not reached ({alerts})')
+                if to_target is not None and to_target <= 30:
+                    self.check(('soon', TARGET_LEVEL) in aw.roastLevelAlerted, f'roast level {phase}: alert given {to_target:.0f} s ahead of the target ({alerts})')
 
         def weigh_out() -> None:
             self.tap(self.panel('assist_weigh'), 'Weigh out')
@@ -535,9 +565,12 @@ class Driver:
             ('fan 120 again', once(lambda: self.drag(aw.slider1, 'fan slider', 120))),
             ('development', wait(4)),
             ('guide development', once(lambda: guide_check('development', 'Development', 'Drop window'))),
+            ('to City', until_roast(650)), # BT 200 to 201: City begins at 200, Half City at 195
+            ('roast level development', once(lambda: roast_level_check('in development', (0, 1)))),
             ('to DROP', until_roast(DROP_AT)),
             ('drop', once(drop)),
             ('wait drop', ensure_drop),
+            ('roast level drop', once(lambda: roast_level_check('at DROP', (1, 2), in_guide=False))), # BT 204: City+ begins there
             ('cooling', wait(6)),
             ('dialogs', once(dismiss_dialogs)),
             ('guide after drop', once(lambda: guide_check('cool-down', 'Dropped', 'development', 'Weigh out'))),
