@@ -15,11 +15,13 @@
     .\dev\run-dev.ps1                 # later runs
     .\dev\run-dev.ps1 -NoLog          # without the interaction log
     .\dev\run-dev.ps1 -Record         # also record the screen and the microphone for as long as Artisan is open
+                                      # (always on with the roaster's settings profile FZ94, unless -NoRecord)
 #>
 param(
     [switch]$CopySettings,
     [switch]$NoLog,
     [switch]$Record,                # screen recording (dev\record-session.ps1), started and stopped with Artisan
+    [switch]$NoRecord,
     [string]$SettingsProfile = 'Dev',
     [string]$Venv = (Join-Path $env:LOCALAPPDATA 'artisan-dev\.venv')
 )
@@ -46,6 +48,9 @@ $env:ARTISAN_MCP = '1' # MCP server for Claude on http://127.0.0.1:8765/mcp (rea
 
 # the screen recording runs in its own minimized window. Not getting it started must never keep Artisan from starting,
 # but is said out loud, as a roast is only roasted once
+# the roaster build always records, whatever its launcher passes: the launcher is written by the update.ps1 of the
+# checkout, which can be older than this release
+if ($SettingsProfile -eq 'FZ94' -and -not $NoRecord) { $Record = $true }
 $rec = $null
 $recording = 'off'
 $stopFile = Join-Path $env:TEMP "artisan-record-stop-$PID"
@@ -53,8 +58,8 @@ if ($Record) {
     try {
         Remove-Item $stopFile -ErrorAction SilentlyContinue
         $rec = Start-Process powershell -PassThru -WindowStyle Minimized -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-File', "`"$(Join-Path $PSScriptRoot 'record-session.ps1')`"", '-StopFile', "`"$stopFile`""
-        Start-Sleep 3 # a recording that cannot start (no ffmpeg, no screen grab) has given up by now
+            '-File', "`"$(Join-Path $PSScriptRoot 'record-session.ps1')`"", '-StopFile', "`"$stopFile`"", '-WatchPid', $PID
+        Start-Sleep 5 # a recording that cannot start (no ffmpeg, no screen grab) has given up by now
         if ($rec.HasExited) { throw 'the recorder stopped right away' }
         $recording = 'on'
     } catch {

@@ -10,7 +10,7 @@ Windows setup and workflow-analysis tools for this fork.
 | `backup-original.ps1` | Preserves the installed Artisan in full (program folder, its registry settings, app data, roast folder) to `~/artisan-backups/original-<stamp>` with a SHA-256 manifest, and verifies every file. |
 | `restore-original.ps1` | Restores that backup. Defaults to a dry run; use `-Apply` to restore, and `-Program` (elevated) to also restore the program folder. Never deletes roast files. |
 | `fz94_sim.py` | A simulated FZ94: a Modbus TCP server with the roaster's real slave IDs and registers, playing the median logged roast curve. Drives ramp to their setpoints and the heat limit caps ET. |
-| `e2e-test.ps1` | End-to-end test of the whole capture pipeline against the simulator, using an isolated `Artisan-E2E` profile (it refuses to start unless Modbus points at the simulator). `e2e_driver.py` operates the app through a full roast; `e2e_verify.py` cross-checks driver ground truth, the interaction log, the Modbus trace, the saved `.alog` and the video, and writes `e2e-report.md`. |
+| `e2e-test.ps1` | End-to-end test of the whole capture pipeline against the simulator, using an isolated `Artisan-E2E` profile (it refuses to start unless Modbus points at the simulator). `e2e_driver.py` operates the app through a full roast (including the heating elements, and the roast level with a target and its alerts); `e2e_verify.py` cross-checks driver ground truth, the interaction log, the Modbus trace, the saved `.alog` and the video, and writes `e2e-report.md`. |
 | `update.ps1` | Safe update of the roaster build. It builds a release from a commit outside OneDrive (`%LOCALAPPDATA%\artisan-fork\r\<commit>`, with its own environment) and runs the E2E tests on it (normal and with faults). Only if every check passes does it become what the **Artisan FZ94** desktop shortcut starts. `-Pull` releases the newest pushed commit, `-Rollback` goes back to the previous release, and `-Status` shows both. |
 | `setup-roast-archive.ps1` | Creates the private roast archive: a git repository (default `~\fz94-roasts`) holding every roast and the tasting log, pushed to a private GitHub repository. It also points the dev and roaster builds at it. |
 | `fake_claude_api.py` | A stand-in for the Claude API, used by the E2E test of the Claude panel (no key, no cost). |
@@ -18,7 +18,7 @@ Windows setup and workflow-analysis tools for this fork.
 
 ## Recording a roast for analysis
 
-The **Artisan FZ94** shortcut captures everything by itself: the interaction log, the Modbus trace and the screen recording (with the microphone, for narration) start with Artisan and stop when it's closed. Artisan's message line says so at startup, with the build it's running, e.g. "Build 1a2b3c4d of 2026-11-24 20:10, interaction log and MODBUS trace on, screen recording on". If the recording can't start, a warning pops up and Artisan starts without it.
+The **Artisan FZ94** shortcut (settings profile `FZ94`) captures everything by itself: the interaction log, the Modbus trace and the screen recording (with the microphone, for narration) start with Artisan and stop when it's closed. Artisan's message line says so at startup, with the build it's running, e.g. "Build 1a2b3c4d of 2026-11-24 20:10, interaction log and MODBUS trace on, screen recording on". If the recording can't start, a warning pops up and Artisan starts without it.
 
 By hand (the dev build, or the installed Artisan):
 
@@ -52,27 +52,35 @@ Text typed into input fields is never recorded, only the fact that typing happen
   - live development time and ratio against the drop window (20–25 %)
   - after DROP: the cool-down to ET 100 °C and a reminder to weigh out
 - **Elements Left / Center / Right** (top row of the window, between the toolbar and the phase LCDs): tap when you switch an element on or off. There's no intensity, only on/off.
-  - All three start **on** with every roast (pressing ON resets them), since the roaster is never started otherwise.
-  - The state is logged at CHARGE, and every switch is logged as an event (event type "Elements": value 10 × elements on, description names which).
+  - All three start **on** with every roast, since the roaster is never started otherwise: pressing ON resets them, and so does every START (also a second roast without OFF and ON in between).
+  - Before the beans go in, the guide says so in orange if a button shows an element off.
+  - The state is logged with the first reading of the recording ("at start: elements L+C+R on"), and every switch is logged as an event (event type "Elements": value 10 × elements on, description names which).
   - Each button shows how long the element has been on or off.
-  - The graph shows one lane per element along the top (L, C, R) with a bar while it's on; the open bar grows with the roast.
+  - The graph shows one lane per element (L, C, R): a faint track across the graph with a red bar while the element is on, so a gap in the bar reads as off. The bars start with the recording, before CHARGE, and the open bar grows with the roast.
+  - While recording the lanes run along the top of the graph. Afterwards Artisan writes the phase statistics there, so the lanes sit right below them, lined up with the phases bar. The bars are drawn behind the curves.
+  - The Elements events aren't also drawn the way Artisan draws events (a step line of the number of elements on): the lanes say the same.
   - Claude sees each element's on periods and total on time (`heating_elements` in get_live_roast and get_roast).
 - **BEAN / IN / OUT tiles:** always show the bean (and the background roast it's compared with), the green weight, and the roasted weight with the loss %. A tile with an orange border needs filling in (no bean or green weight, or not yet weighed after DROP).
 - **Charge:** one tap sets fan 120 and drum 50.
-- **Roast setup** (tap BEAN or IN): name, bean, green weight, and the background roast. The best match (same bean, ±10 % batch size, newest) is listed first; it comes from an index of the roast folder.
+- **Roast setup** (tap BEAN or IN): name, bean, green weight, the roast level to drop at, and the background roast. The best match (same bean, ±10 % batch size, newest) is listed first; it comes from an index of the roast folder.
 - **Weigh out** (tap OUT): type the scale reading on the keypad; the stored cooling-container weight (default 1,246 g) is subtracted, and the loss % is checked.
 - Settings: QSettings group `RoastAssist` (chargeET, chargeFan, chargeDrum, dtrMin, dtrMax, safeET, tare, historyFolder).
 
 ## Roast level and countdown
 
-Config → Phases → **Roast Level** (off by default) names the roast level reached so far (Half City, City, City+, Full City) and counts down to the next one.
+Names the roast level reached so far (Half City, City, City+, Full City) and counts down to the next one. On by default; Config → Phases → **Roast Level**.
 
-- **Where:** a coloured badge right of the phase LCDs with the countdown above it ("»City+ 0:34"), and a line in the guide during development ("City · City+ at 207 °C in ~0:34"). The countdown turns orange in the last 30 s.
-- **Level:** taken from the highest bean temperature estimate since the turning point, so it never goes back.
-- **Estimate:** BT plus the **Offset**. Optionally a share of ET and of one extra channel (e.g. the exhaust) is blended in; both are air temperatures and read above the beans, so they're best left at 0 %.
-- **Countdown:** a straight line through the last 60 s of the estimate, extended to the next limit. The controllers report whole degrees, so expect it to be right to within about 5 s.
-- **Limits:** the defaults are the bean temperatures of Sweet Maria's pictorial guide (City 219 °C, City+ 224 °C, Full City 230–234 °C; Half City from 213 °C), where first crack begins at 205 °C.
-- **Offset for this roaster:** the FZ94's bean probe reads first crack at a median 188 °C, 17 °C lower. With Offset 0 a typical roast (drop at 204 °C) never reaches Half City; **Offset 17** puts City at BT 202, City+ at 207 and Full City at 213. Check it against the colour of a few roasts and adjust.
+- **Where:** a line in the guide ("City · City+ at 204 °C in ~0:22"), and a coloured badge right of the phase LCDs with the countdown above it ("»City+ 0:22"). The badge is left out when the top row has no room for it. The countdown turns orange in the last 30 s, and isn't shown while more than 5 minutes off.
+- **Target level** (roast setup, "Drop at"; also Config → Phases): the countdown then runs to that level, not just to the next one.
+  - Up to it the guide reads "City → City+ at 204 °C in ~0:22", within it "City+: DROP · Full City at 209 °C in ~0:25", beyond it "Full City: past the target City+".
+  - **Alerts:** 30 s ahead of the target (two tones) and when it's reached (three higher tones). Each time the guide and the badge blink orange for a few seconds and Artisan's message line says what to do. Each alert is given once per roast.
+  - The sound needs the PC's speakers on; untick *Sound* in Config → Phases to silence it. The target stays set for the next roast until changed.
+- **Level:** taken from the highest BT since its lowest point after CHARGE, so it never goes back.
+- **Limits (BT, °C):** Half City 195, City 200, City+ 204, Full City 209–212. They're this roaster's own: the chart temperatures (Sweet Maria's pictorial guide) placed between where the logged roasts marked first crack (median 188.5 °C, 126 roasts) and second crack (212 °C, 29 roasts). Above 212 the badge says "Past Full City": second crack is about to start.
+- **How sure:** the levels are 4–5 °C apart and the first-crack marks alone spread over 12 °C (middle half), so read the level as right to about one level. By weight loss the order holds: roasts dropped below Half City lost a median 13.3 %, City+ 15.5 %, past Full City 17.3 %.
+- **Countdown:** a straight line through the last 30 s of BT (up to 90 s while BT rose by less than 3 °C), extended to the next limit. Replayed over the 154 logged roasts: 30 s ahead it was off by 5 s in the median and by more than 15 s one time in ten; 60 s ahead by 11 s and 32 s. A fan or drum change moves it.
+- **How fast:** BT rose at a median 11 °C/min when it crossed these limits, so a level lasts about 25 s.
+- **Other settings:** an **Offset** added to BT, and a share of ET or of one extra channel (e.g. the exhaust) blended in. Both are air temperatures and read above the beans, so they're best left at 0 %. *Restore Defaults* brings back the limits above.
 
 ## Claude assistant (MCP server)
 
@@ -127,6 +135,7 @@ Run `setup-roast-archive.ps1` once. After that, every save and tasting copies ne
 ```
 
 - **From the desktop:** the **Update Artisan FZ94** shortcut runs `update.ps1 -Pull` and leaves the window open to show how it went.
+- **The scripts update with the checkout:** `update.ps1` runs from this checkout, so `git pull` here first when the update script itself changed (the release it builds always uses its own `run-dev.ps1`).
 - **Only pushed commits are released:** work that is not committed and pushed to this branch never reaches the roaster.
 - **Which build:** the **Artisan FZ94** desktop shortcut always starts the last release that passed the tests, and Artisan's message line names it at startup.
 - **Settings:** the roaster build uses the settings profile `Artisan-FZ94`, created from `Artisan-Dev` on the first update. The tests run with a copy of it, pointed at the simulator.

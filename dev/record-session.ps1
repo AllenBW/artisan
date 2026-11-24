@@ -24,7 +24,8 @@ param(
     [string]$Mic = '',                      # DirectShow audio device name; default: first one found
     [string]$OutDir = '',
     [int]$Seconds = 0,                      # stop automatically after this many seconds (0: until q is pressed)
-    [string]$StopFile = ''                  # stop once this file exists, instead of on q
+    [string]$StopFile = '',                 # stop once this file exists, instead of on q
+    [int]$WatchPid = 0                      # with -StopFile: also stop once this process is gone (the launcher was closed)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,7 +71,8 @@ if ($StopFile) {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true
     $ff = [System.Diagnostics.Process]::Start($psi)
-    while (-not $ff.HasExited -and -not (Test-Path $StopFile)) { Start-Sleep -Milliseconds 500 }
+    while (-not $ff.HasExited -and -not (Test-Path $StopFile) -and
+        ($WatchPid -eq 0 -or (Get-Process -Id $WatchPid -ErrorAction SilentlyContinue))) { Start-Sleep -Milliseconds 500 }
     if (-not $ff.HasExited) {
         $ff.StandardInput.Write('q')
         $ff.StandardInput.Flush()
