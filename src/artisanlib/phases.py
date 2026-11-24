@@ -28,10 +28,11 @@
 from typing import TYPE_CHECKING
 from artisanlib.dialogs import ArtisanDialog
 from artisanlib.main import UI_MODE
+from artisanlib.roast_level import ROAST_LEVELS, ROAST_LEVEL_LIMITS_F_DEFAULT, ROAST_LEVEL_LIMITS_C_DEFAULT
 
 from PyQt6.QtCore import Qt, pyqtSlot, QSettings
 from PyQt6.QtWidgets import (QApplication, QLabel, QDialogButtonBox, QGridLayout,
-    QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QLayout, QSpinBox)
+    QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QLayout, QSpinBox, QDoubleSpinBox, QGroupBox)
 
 if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # noqa: F401 # pylint: disable=unused-import
@@ -52,6 +53,7 @@ class phasesGraphDlg(ArtisanDialog):
         self.org_autoFCsFlag = bool(self.aw.qmc.autoFCsFlag)
         self.org_phasesLCDmode_l = list(self.aw.qmc.phasesLCDmode_l)
         self.org_phasesLCDmode_all = list(self.aw.qmc.phasesLCDmode_all)
+        self.org_roastLevelFlag = bool(self.aw.qmc.roastLevelFlag)
         #
         dryLabel = QLabel(QApplication.translate('Label', 'Drying'))
         midLabel = QLabel(QApplication.translate('Label', 'Maillard'))
@@ -182,6 +184,76 @@ class phasesGraphDlg(ArtisanDialog):
 
         self.events2phases()
 
+        # Roast Level indicator
+        self.roastLevelFlag = QCheckBox(QApplication.translate('CheckBox','Roast Level'))
+        self.roastLevelFlag.setToolTip(QApplication.translate('Tooltip','Show the roast level reached so far and the countdown to the next one next to the phases LCDs while recording'))
+        self.roastLevelFlag.setChecked(bool(self.aw.qmc.roastLevelFlag))
+        self.roastLevelFlag.stateChanged.connect(self.roastLevelFlagChanged)
+        self.roastLevelLimits:list[QSpinBox] = []
+        for _ in range(len(ROAST_LEVELS) + 1):
+            spinbox = QSpinBox()
+            spinbox.setAlignment(Qt.AlignmentFlag.AlignRight)
+            spinbox.setMinimumWidth(80)
+            spinbox.setRange(0,1000)
+            spinbox.setSuffix(f' {self.aw.qmc.mode}')
+            self.roastLevelLimits.append(spinbox)
+        self.roastLevelETweight = QSpinBox()
+        self.roastLevelETweight.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.roastLevelETweight.setRange(0,100)
+        self.roastLevelETweight.setSuffix(' %')
+        self.roastLevelETweight.setToolTip(QApplication.translate('Tooltip','Share of ET in the bean temperature estimate.\n0% uses the bean probe (BT) only.'))
+        # an extra channel, like the exhaust probe of a drum roaster, to blend in
+        self.roastLevelXchannel = QComboBox()
+        self.roastLevelXchannel.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.roastLevelXchannel.addItem(QApplication.translate('ComboBox','None'), -1)
+        for i in range(len(self.aw.qmc.extradevices)):
+            self.roastLevelXchannel.addItem(self.aw.qmc.device_name_subst(self.aw.qmc.extraname1[i]), 2*i)
+            self.roastLevelXchannel.addItem(self.aw.qmc.device_name_subst(self.aw.qmc.extraname2[i]), 2*i+1)
+        self.roastLevelXchannel.setToolTip(QApplication.translate('Tooltip','Extra channel to blend into the bean temperature estimate, like an exhaust probe'))
+        self.roastLevelXchannel.currentIndexChanged.connect(self.roastLevelXchannelChanged)
+        self.roastLevelXweight = QSpinBox()
+        self.roastLevelXweight.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.roastLevelXweight.setRange(0,100)
+        self.roastLevelXweight.setSuffix(' %')
+        self.roastLevelXweight.setToolTip(QApplication.translate('Tooltip','Share of the extra channel in the bean temperature estimate'))
+        # BT takes what ET and the extra channel leave, thus their shares cannot exceed 100% together
+        self.roastLevelETweight.valueChanged.connect(lambda v: self.roastLevelXweight.setMaximum(100 - v))
+        self.roastLevelXweight.valueChanged.connect(lambda v: self.roastLevelETweight.setMaximum(100 - v))
+        self.roastLevelOffset = QDoubleSpinBox()
+        self.roastLevelOffset.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.roastLevelOffset.setDecimals(1)
+        self.roastLevelOffset.setSingleStep(0.5)
+        self.roastLevelOffset.setRange(-100,100)
+        self.roastLevelOffset.setSuffix(f' {self.aw.qmc.mode}')
+        self.roastLevelOffset.setToolTip(QApplication.translate('Tooltip','Added to the bean temperature estimate to correct for a probe reading low (positive) or high (negative)'))
+        self.getRoastLevel()
+
+        roastLevelLayout = QGridLayout()
+        roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', 'min','abbrev of minimum')),0,1,Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignBottom)
+        roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', 'max')),0,2,Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignBottom)
+        for i, name in enumerate(ROAST_LEVELS):
+            roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', name)),i+1,0,Qt.AlignmentFlag.AlignRight)
+            roastLevelLayout.addWidget(self.roastLevelLimits[i],i+1,1)
+            if i+1 < len(ROAST_LEVELS):
+                # the max of one level is the min of the next
+                maxLabel = QLabel()
+                self.roastLevelLimits[i+1].valueChanged.connect(lambda v, label=maxLabel: label.setText(f'{v} {self.aw.qmc.mode}'))
+                maxLabel.setText(f'{self.roastLevelLimits[i+1].value()} {self.aw.qmc.mode}')
+                roastLevelLayout.addWidget(maxLabel,i+1,2,Qt.AlignmentFlag.AlignRight)
+            else:
+                roastLevelLayout.addWidget(self.roastLevelLimits[i+1],i+1,2)
+        roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', 'ET share')),1,3,Qt.AlignmentFlag.AlignRight)
+        roastLevelLayout.addWidget(self.roastLevelETweight,1,4)
+        roastLevelLayout.addWidget(self.roastLevelXchannel,2,3,Qt.AlignmentFlag.AlignRight)
+        roastLevelLayout.addWidget(self.roastLevelXweight,2,4)
+        roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', 'Offset')),3,3,Qt.AlignmentFlag.AlignRight)
+        roastLevelLayout.addWidget(self.roastLevelOffset,3,4)
+        roastLevelLayout.addWidget(self.roastLevelFlag,4,3,1,2,Qt.AlignmentFlag.AlignRight)
+        roastLevelLayout.setColumnMinimumWidth(3,80)
+        roastLevelGroup = QGroupBox(QApplication.translate('GroupBox','Roast Level'))
+        roastLevelGroup.setToolTip(QApplication.translate('Tooltip','Bean temperature estimate = BT share x BT + ET share x ET + extra channel share x extra channel + Offset\nBT takes the share ET and the extra channel leave.\nThe level shown is that of the highest estimate since TP'))
+        roastLevelGroup.setLayout(roastLevelLayout)
+
         boxedPhaseLayout = QHBoxLayout()
         boxedPhaseLayout.addStretch()
         boxedPhaseLayout.addLayout(phaseLayout)
@@ -203,6 +275,7 @@ class phasesGraphDlg(ArtisanDialog):
         mainLayout.addLayout(boxedPhaseLayout)
         if self.aw.ui_mode is UI_MODE.EXPERT:
             mainLayout.addLayout(boxedPhaseFlagLayout)
+        mainLayout.addWidget(roastLevelGroup)
         mainLayout.addStretch()
         mainLayout.addSpacing(10)
         mainLayout.addLayout(buttonsLayout)
@@ -277,6 +350,46 @@ class phasesGraphDlg(ArtisanDialog):
                 self.aw.phasesLCDs.hide()
 
     @pyqtSlot(int)
+    def roastLevelFlagChanged(self, _:int) -> None:
+        self.aw.qmc.roastLevelFlag = self.roastLevelFlag.isChecked()
+        if self.aw.qmc.flagstart:
+            if self.aw.qmc.roastLevelFlag:
+                self.aw.updateRoastLevel()
+                self.aw.roastLevelFrame.show()
+            else:
+                self.aw.roastLevelFrame.hide()
+
+    @pyqtSlot(int)
+    def roastLevelXchannelChanged(self, _:int) -> None:
+        has_channel = self.roastLevelXchannel.currentData() != -1
+        if not has_channel:
+            self.roastLevelXweight.setValue(0)
+        self.roastLevelXweight.setEnabled(has_channel)
+
+    def getRoastLevel(self) -> None:
+        for spinbox, limit in zip(self.roastLevelLimits, self.aw.qmc.roastLevelLimits, strict=True):
+            spinbox.setValue(int(round(limit)))
+        self.roastLevelETweight.setValue(int(round(self.aw.qmc.roastLevelETweight * 100)))
+        x = self.roastLevelXchannel.findData(self.aw.qmc.roastLevelXchannel)
+        self.roastLevelXchannel.setCurrentIndex(max(x, 0)) # an extra channel that does not exist anymore falls back to None
+        self.roastLevelXweight.setValue(int(round(self.aw.qmc.roastLevelXweight * 100)))
+        self.roastLevelXchannelChanged(0)
+        self.roastLevelOffset.setValue(self.aw.qmc.roastLevelOffset)
+
+    def setRoastLevel(self) -> None:
+        # keep the limits ascending
+        limits:list[int] = []
+        for spinbox in self.roastLevelLimits:
+            limits.append(max(spinbox.value(), limits[-1]) if limits else spinbox.value())
+        self.aw.qmc.roastLevelLimits = limits
+        self.aw.qmc.roastLevelETweight = self.roastLevelETweight.value() / 100
+        self.aw.qmc.roastLevelXchannel = self.roastLevelXchannel.currentData()
+        self.aw.qmc.roastLevelXweight = self.roastLevelXweight.value() / 100
+        self.aw.qmc.roastLevelOffset = self.roastLevelOffset.value()
+        if self.aw.qmc.flagstart and self.aw.qmc.roastLevelFlag:
+            self.aw.updateRoastLevel()
+
+    @pyqtSlot(int)
     def autoDRYflagChanged(self, _:int) -> None:
         self.aw.qmc.autoDRYflag = not self.aw.qmc.autoDRYflag
         if self.aw.qmc.autoDRYflag:
@@ -326,6 +439,7 @@ class phasesGraphDlg(ArtisanDialog):
             self.aw.qmc.phasesbuttonflag = True
         else:
             self.aw.qmc.phasesbuttonflag = False
+        self.setRoastLevel()
         self.aw.qmc.redraw(recomputeAllDeltas=False)
         self.savePhasesSettings()
         #save window position (only; not size!)
@@ -345,6 +459,9 @@ class phasesGraphDlg(ArtisanDialog):
         self.aw.qmc.autoFCsFlag = bool(self.org_autoFCsFlag)
         self.aw.qmc.phasesLCDmode_l = list(self.org_phasesLCDmode_l)
         self.aw.qmc.phasesLCDmode_all = list(self.org_phasesLCDmode_all)
+        self.aw.qmc.roastLevelFlag = bool(self.org_roastLevelFlag)
+        if self.aw.qmc.flagstart:
+            self.aw.roastLevelFrame.setVisible(self.aw.qmc.roastLevelFlag)
         self.aw.qmc.redraw(recomputeAllDeltas=False)
         self.savePhasesSettings()
         #save window position (only; not size!)
@@ -370,5 +487,11 @@ class phasesGraphDlg(ArtisanDialog):
             self.aw.qmc.phases = list(self.aw.qmc.phases_celsius_defaults)
         self.events2phases()
         self.getphases()
+        for spinbox, limit in zip(self.roastLevelLimits,
+                ROAST_LEVEL_LIMITS_F_DEFAULT if self.aw.qmc.mode == 'F' else ROAST_LEVEL_LIMITS_C_DEFAULT, strict=True):
+            spinbox.setValue(limit)
+        self.roastLevelETweight.setValue(0)
+        self.roastLevelXweight.setValue(0)
+        self.roastLevelOffset.setValue(0)
         self.aw.sendmessage(QApplication.translate('Message','Phases changed to {0} default: {1}').format(self.aw.qmc.mode,str(self.aw.qmc.phases)))
         self.aw.qmc.redraw(recomputeAllDeltas=False)

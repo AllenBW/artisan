@@ -3,7 +3,7 @@
 # Roast assistance for the touch panel:
 #  - a guide that says where the roast is and what comes next, with targets from matched past roasts
 #    (charge readiness, phase times against the background roast, first crack ETA, live development time and
-#    ratio against the drop window, cool-down to a safe ET)
+#    ratio against the drop window, the roast level with the countdown to the next one, cool-down to a safe ET)
 #  - left/center/right heating element buttons in the window's top bar: each switch is logged as an event, the on
 #    periods are drawn as lanes on the graph (artisanlib/element_lanes.py); all three start on with every roast
 #  - a one-tap charge preset for fan and drum
@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (QApplication, QFrame, QLabel, QPushButton, QVBoxLay
 
 from artisanlib.element_lanes import ELEMENTS, ELEMENTS_EVENT_TYPE, ElementLanes, state_text
 from artisanlib.roast_history import RoastHistory, normalize_bean
+from artisanlib.roast_level import ROAST_LEVEL_ETA_WARN
 from artisanlib.tasting_log import TastingLog, TastingDialog, default_path as tasting_log_path
 from artisanlib.util import getDataDirectory
 
@@ -373,6 +374,26 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
 
     # ---- guide
 
+    # 'City · City+ at 207 °C in ~0:40': the roast level reached and the countdown to the next one, once it is less than
+    # five minutes away (Config > Phases > Roast Level); empty if the indicator is off or there is nothing to say yet
+    def roast_level_text(self) -> str:
+        qmc = self.aw.qmc
+        if not getattr(qmc, 'roastLevelFlag', False):
+            return ''
+        try:
+            level, _, nxt, secs = self.aw.roastLevelStatus()
+            parts = [f'<b>{self.aw.roastLevelName(level)}</b>'] if level is not None else []
+            if nxt is not None and secs is not None and secs <= 300:
+                # the limit as the BT to watch for, which it only is while BT alone makes the estimate
+                bt_only = qmc.roastLevelETweight == 0 and qmc.roastLevelXweight == 0
+                at = f' at {qmc.roastLevelLimits[nxt] - qmc.roastLevelOffset:.0f} °{qmc.mode}' if bt_only else ''
+                style = f'color:{ATTENTION}' if secs <= ROAST_LEVEL_ETA_WARN else ''
+                parts.append(f'{self.aw.roastLevelName(nxt)}{at} in <span style="{style}"><b>~{mmss(secs)}</b></span>')
+            return ' · '.join(parts)
+        except Exception as e: # pylint: disable=broad-except
+            _log.exception(e)
+            return ''
+
     def refresh(self) -> None:
         qmc = self.aw.qmc
         if qmc.flagon != self.last_flagon:
@@ -470,9 +491,10 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
             color = '#3fb950' if self.dtr_min <= dtr <= self.dtr_max else ('#d9822b' if dtr > self.dtr_max else '')
             dtr_txt = f'<span style="color:{color}"><b>{dtr:.0f} %</b></span>' if color else f'<b>{dtr:.0f} %</b>'
             refdev = target('dev_time')
+            level = self.roast_level_text()
             return (f'<b>Development</b> {mmss(dev)} · {dtr_txt}{ror_txt}<br>'
                 f'Drop window ({self.dtr_min:.0f}–{self.dtr_max:.0f} %): <b>{mmss(lo)}–{mmss(hi)}</b>'
-                + (f' · {ref_name}: {mmss(refdev)}' if refdev else '') + bg_note)
+                + (f' · {ref_name}: {mmss(refdev)}' if refdev else '') + (f'<br>{level}' if level else '') + bg_note)
         if dry is not None and t is not None:
             fc_bt = target('fcs_bt') or FC_BT_DEFAULT
             eta = ''
@@ -480,6 +502,9 @@ class RoastAssist(QObject): # pyright: ignore[reportGeneralTypeIssues]
                 secs = (fc_bt - bt) / ror * 60
                 style = 'color:#d9822b' if secs <= 60 else ''
                 eta = f'<br>First crack (~{fc_bt:.0f} °C) expected in <span style="{style}"><b>~{mmss(secs)}</b></span> at the current RoR'
+            if not eta: # first crack not marked though BT is past it: the roast level takes the line
+                level = self.roast_level_text()
+                eta = f'<br>{level}' if level else ''
             ref_fc = target('fcs_time')
             return (f'<b>Maillard</b> {mmss(t - dry)} · roast {mmss(t)}{ror_txt}{eta}'
                 + (f'<br>{ref_name}: first crack at {mmss(ref_fc)}' if ref_fc else '') + bg_note)

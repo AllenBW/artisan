@@ -119,7 +119,7 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QMessageBox, QLabel, QMainWi
 from PyQt6.QtGui import (QScreen, QPageLayout, QAction, QWindow,
                             QKeySequence, QShortcut,
                             QPixmap,QColor,QDesktopServices,QIcon,
-                            QRegularExpressionValidator, QDoubleValidator, QPainter, QCursor)
+                            QRegularExpressionValidator, QDoubleValidator, QPainter, QCursor, QFont, QFontMetrics)
 from PyQt6.QtPrintSupport import (QPrinter,QPrintDialog)
 from PyQt6.QtCore import (QStandardPaths, QLibraryInfo, QTranslator, QLocale, QFileInfo, pyqtSignal, pyqtSlot, QtMsgType,
                           qVersion, QVersionNumber, QTime, QTimer, QFile, QIODevice, QTextStream, QSettings, QSize,
@@ -675,6 +675,8 @@ from artisanlib.widgets import (MyQLCDNumber, EventPushButton, MajorEventPushBut
 
 from artisanlib.notifications import Notification, NotificationManager, NotificationType
 from artisanlib.canvas import tgraphcanvas
+from artisanlib.roast_level import (ROAST_LEVELS, ROAST_LEVEL_COLORS, ROAST_LEVEL_ETA_WARN, max_estimated_temp, seconds_to_temp,
+    next_limit, roast_level)
 from artisanlib.phases_canvas import tphasescanvas
 from artisanlib.scale import ScaleManager
 
@@ -1445,7 +1447,7 @@ class ApplicationWindow(QMainWindow):
         'keyboardmoveflag', 'lastkeyboardcmd', 'error_dlg', 'serial_dlg', 'message_dlg', 'ETname', 'BTname', 'level1frame', 'level1layout', 'qpc', 'splitter', 'scroller', 'EventsGroupLayout',
         'LCD2frame', 'LCD3frame', 'LCD4frame', 'LCD5frame', 'LCD6frame', 'LCD7frame', 'TPlabel', 'TPlcd', 'TPlcdFrame', 'TP2DRYlabel', 'TP2DRYframe',
         'DRYlabel', 'DRYlcd', 'DRYlcdFrame', 'DRY2FCslabel', 'DRY2FCsframe', 'FCslabel', 'FCslcd', 'FCslcdFrame', 'AUClabel', 'AUClcd', 'AUClcdFrame',
-        'AUCLCD', 'phasesLCDs', 'extrabuttonsLayout', 'extrabuttondialogs', 'slider1', 'slider2', 'slider3', 'slider4', 'sliderLCD1', 'sliderLCD2', 'sliderLCD3',
+        'AUCLCD', 'roastLevelLabel', 'roastLevelValue', 'roastLevelFrame', 'phasesLCDs', 'extrabuttonsLayout', 'extrabuttondialogs', 'slider1', 'slider2', 'slider3', 'slider4', 'sliderLCD1', 'sliderLCD2', 'sliderLCD3',
         'sliderLCD4', 'sliderGrpBox1', 'sliderGrpBox2', 'sliderGrpBox3', 'sliderGrpBox4', 'sliderSV', 'sliderLCDSV', 'sliderGrpBoxSV', 'leftlayout',
         'sliderFrame', 'sliderDock', 'lcdFrame', 'midlayout', 'editgraphdialog', 'artisanviewerFirstStart',
         'buttonpalette', 'extraeventbuttontextcolor', 'extraeventsactions', 'extraeventsdescriptions', 'extraeventstypes', 'extraeventsvalues',
@@ -3470,6 +3472,34 @@ class ApplicationWindow(QMainWindow):
         self.AUCLCD.setLayout(AUCLayout)
         self.AUCLCD.hide()
 
+        # Roast Level indicator
+        self.roastLevelLabel: QLabel = QLabel()
+        self.roastLevelLabel.setText(self.label_fmt.format(QApplication.translate('Label', 'Roast Level')))
+        self.roastLevelLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.roastLevelValue: QLabel = QLabel('---')
+        self.roastLevelValue.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.roastLevelValue.setMinimumHeight(30)
+        roastLevelFont = QFont(self.roastLevelValue.font())
+        roastLevelFont.setBold(True)
+        # wide enough for the longest level and for the countdown in the label above it, so that nothing moves as they change
+        self.roastLevelValue.setMinimumWidth(max(QFontMetrics(roastLevelFont).boundingRect(text).width()
+            for text in (' Past Full City ', '»Full City 00:00')) + 12)
+        roastLevelVBox = QVBoxLayout()
+        roastLevelVBox.addWidget(self.roastLevelLabel)
+        roastLevelVBox.addWidget(self.roastLevelValue)
+        roastLevelVBox.addSpacing(12) # to align with the phases LCDs
+        roastLevelVBox.setSpacing(0)
+        roastLevelVBox.setContentsMargins(0, 0, 0, 0)
+        roastLevelLayout = QHBoxLayout()
+        roastLevelLayout.addSpacing(20)
+        roastLevelLayout.addLayout(roastLevelVBox)
+        roastLevelLayout.setContentsMargins(0, 0, 0, 0)
+        roastLevelLayout.setSpacing(0)
+        self.roastLevelFrame: QFrame = QFrame()
+        self.roastLevelFrame.setContentsMargins(0, 0, 0, 0)
+        self.roastLevelFrame.setLayout(roastLevelLayout)
+        self.roastLevelFrame.hide()
+
 
         self.phasesLCDs = QFrame()
         self.phasesLCDs.setContentsMargins(10, 0, 0, 0) # left, top, right, bottom
@@ -3493,6 +3523,7 @@ class ApplicationWindow(QMainWindow):
         fullPhasesLCDlayout = QHBoxLayout()
         fullPhasesLCDlayout.addWidget(self.phasesLCDs)
         fullPhasesLCDlayout.addWidget(self.AUCLCD)
+        fullPhasesLCDlayout.addWidget(self.roastLevelFrame)
         fullPhasesLCDlayout.setContentsMargins(0, 0, 0, 0)
         fullPhasesLCDlayout.setSpacing(0)
 
@@ -6294,6 +6325,7 @@ class ApplicationWindow(QMainWindow):
         self.DRY2FCslabel.setStyleSheet(label_style)
         self.FCslabel.setStyleSheet(label_style)
         self.AUClabel.setStyleSheet(label_style)
+        self.roastLevelLabel.setStyleSheet(label_style)
 
     # timex: if True, adjust time axis
     # deltas: if True adjust delta axis
@@ -7549,6 +7581,61 @@ class ApplicationWindow(QMainWindow):
         frame.setLayout(LCDVbox)
 
         return frame
+
+    # the name of the roast level starting at the given index into the roast level limits
+    @staticmethod
+    def roastLevelName(i:int) -> str:
+        if i < len(ROAST_LEVELS):
+            return QApplication.translate('Label', ROAST_LEVELS[i])
+        return QApplication.translate('Label', 'Past {0}').format(QApplication.translate('Label', ROAST_LEVELS[-1]))
+
+    # returns the roast level reached so far (index into ROAST_LEVELS, len(ROAST_LEVELS) beyond the last, None below
+    # the first), the highest bean temperature estimate since TP up to DROP it is taken from, the index into the roast
+    # level limits of the limit reached next and the seconds until then at the current rate of rise (None if unknown,
+    # and always after DROP)
+    def roastLevelStatus(self) -> tuple[int|None, float|None, int|None, float|None]:
+        qmc = self.qmc
+        if qmc.timeindex[0] < 0 or not qmc.TPalarmtimeindex:
+            return None, None, None, None
+        dropped = qmc.timeindex[6] > 0
+        end = (qmc.timeindex[6] + 1) if dropped else len(qmc.temp2)
+        xt:list[float]|None = None
+        x = qmc.roastLevelXchannel
+        if 0 <= x < 2*len(qmc.extradevices):
+            xt = (qmc.extratemp1 if x % 2 == 0 else qmc.extratemp2)[x // 2]
+        temp = max_estimated_temp(qmc.temp2, qmc.temp1, qmc.TPalarmtimeindex, end,
+            qmc.roastLevelETweight, qmc.roastLevelOffset, xt, qmc.roastLevelXweight)
+        nxt = next_limit(temp, qmc.roastLevelLimits)
+        secs:float|None = None
+        if nxt is not None and not dropped:
+            secs = seconds_to_temp(qmc.roastLevelLimits[nxt], qmc.timex, qmc.temp2, qmc.temp1, qmc.TPalarmtimeindex, end,
+                qmc.roastLevelETweight, qmc.roastLevelOffset, xt, qmc.roastLevelXweight)
+        return roast_level(temp, qmc.roastLevelLimits), temp, nxt, secs
+
+    # shows the roast level reached so far, and above it the countdown to the next one
+    def updateRoastLevel(self) -> None:
+        try:
+            level, temp, nxt, secs = self.roastLevelStatus()
+            if level is None:
+                self.roastLevelValue.setText('---')
+                self.roastLevelValue.setStyleSheet('QLabel { color: ' + self.qmc.palette['messages'][:7] + '; }')
+            else:
+                self.roastLevelValue.setText(f'<b>{self.roastLevelName(level)}</b>')
+                self.roastLevelValue.setStyleSheet(f'QLabel {{ color: white; background-color: {ROAST_LEVEL_COLORS[level]}; border-radius: 4px; padding: 0px 6px; }}')
+            if nxt is not None and secs is not None and secs < 3600:
+                # the end of the last level is not a level to name
+                name = self.roastLevelName(nxt) if nxt < len(ROAST_LEVELS) else QApplication.translate('Label', 'Past')
+                countdown = f'&raquo;{name} {stringfromseconds(secs, False)}'
+                if secs <= ROAST_LEVEL_ETA_WARN:
+                    countdown = f'<span style="color: #d9822b;">{countdown}</span>'
+                self.roastLevelLabel.setText(f'<b>{countdown}</b>') # full size, unlike the other labels of the row: it is read while roasting
+            else:
+                self.roastLevelLabel.setText(self.label_fmt.format(QApplication.translate('Label', 'Roast Level')))
+            if temp is not None:
+                self.roastLevelFrame.setToolTip(QApplication.translate('Tooltip', 'Roast level from the highest bean temperature estimate since TP: {0}{1}').format(
+                    f'{temp:.1f}', self.qmc.mode))
+        except Exception as e: # pylint: disable=broad-except
+            _log.exception(e)
 
     def updateAUCLCD(self) -> None:
         try:
@@ -18356,6 +18443,20 @@ class ApplicationWindow(QMainWindow):
             self.qmc.AUCtargetFlag = toBool(settings.value('AUCtargetFlag',self.qmc.AUCtargetFlag))
             self.qmc.AUCguideFlag = toBool(settings.value('AUCguideFlag',self.qmc.AUCguideFlag))
             self.qmc.AUClcdFlag = toBool(settings.value('AUClcdFlag',self.qmc.AUClcdFlag))
+            self.qmc.roastLevelFlag = toBool(settings.value('roastLevelFlag',self.qmc.roastLevelFlag))
+            if settings.contains('roastLevelLimits'):
+                roastLevelLimits = [toInt(x) for x in toList(settings.value('roastLevelLimits',self.qmc.roastLevelLimits))]
+                if len(roastLevelLimits) == len(self.qmc.roastLevelLimits):
+                    self.qmc.roastLevelLimits = roastLevelLimits
+            elif self.qmc.mode != old_mode:
+                # settings from before the roast level indicator: the limits are still the ones of the mode before the settings
+                # were loaded, as the mode change above converts nothing to keep the loaded values as they are
+                self.qmc.roastLevelLimits = [int(round(convertTemp(t, old_mode, self.qmc.mode))) for t in self.qmc.roastLevelLimits]
+                self.qmc.roastLevelOffset = float2float(self.qmc.roastLevelOffset * (1.8 if self.qmc.mode == 'F' else 1/1.8))
+            self.qmc.roastLevelETweight = min(1., max(0., toFloat(settings.value('roastLevelETweight',self.qmc.roastLevelETweight))))
+            self.qmc.roastLevelXchannel = toInt(settings.value('roastLevelXchannel',self.qmc.roastLevelXchannel))
+            self.qmc.roastLevelXweight = min(1. - self.qmc.roastLevelETweight, max(0., toFloat(settings.value('roastLevelXweight',self.qmc.roastLevelXweight))))
+            self.qmc.roastLevelOffset = toFloat(settings.value('roastLevelOffset',self.qmc.roastLevelOffset))
             self.qmc.AUCLCDmode = toInt(settings.value('AUCLCDmode',self.qmc.AUCLCDmode))
             self.qmc.AUCshowFlag = toBool(settings.value('AUCshowFlag',self.qmc.AUCshowFlag))
             self.keyboardmoveflag = toInt(settings.value('keyboardmoveflag',int(self.keyboardmoveflag)))
@@ -20343,6 +20444,12 @@ class ApplicationWindow(QMainWindow):
             self.settingsSetValue(settings, default_settings, 'AUCtargetFlag',self.qmc.AUCtargetFlag, read_defaults)
             self.settingsSetValue(settings, default_settings, 'AUCguideFlag',self.qmc.AUCguideFlag, read_defaults)
             self.settingsSetValue(settings, default_settings, 'AUClcdFlag',self.qmc.AUClcdFlag, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelFlag',self.qmc.roastLevelFlag, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelLimits',self.qmc.roastLevelLimits, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelETweight',self.qmc.roastLevelETweight, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelXchannel',self.qmc.roastLevelXchannel, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelXweight',self.qmc.roastLevelXweight, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelOffset',self.qmc.roastLevelOffset, read_defaults)
             self.settingsSetValue(settings, default_settings, 'AUCLCDmode',self.qmc.AUCLCDmode, read_defaults)
             self.settingsSetValue(settings, default_settings, 'AUCshowFlag',self.qmc.AUCshowFlag, read_defaults)
             self.settingsSetValue(settings, default_settings, 'keyboardmoveflag',self.keyboardmoveflag, read_defaults)
@@ -28166,6 +28273,11 @@ def main() -> None:
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
             appWindow.sendmessage(f'{addon.__name__.rsplit(".", 1)[-1]} not started: {e}')
+
+    # the launcher (dev/run-dev.ps1) says which build this is and what is being captured
+    build_info = os.environ.get('ARTISAN_BUILD_INFO', '').strip()
+    if build_info:
+        appWindow.sendmessage(build_info)
 
     # with a settings profile this instance does not fall back to the viewer when another Artisan runs;
     # warn if the installed Artisan is open, as only one of them can use the machine's port

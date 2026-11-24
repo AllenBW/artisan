@@ -76,6 +76,7 @@ from artisanlib.util import (to_ascii, uchr, fill_gaps, deltaLabelPrefix, deltaL
         events_internal_to_external_value, events_external_to_internal_value, smooth_list, computeDeltas)
 from artisanlib import pid
 from artisanlib.time import ArtisanTime
+from artisanlib.roast_level import ROAST_LEVEL_LIMITS_F_DEFAULT
 #from artisanlib.filters import LiveMedian
 from artisanlib.dialogs import ArtisanMessageBox
 from artisanlib.atypes import SerialSettings, BTBreakParams, BbpCache, AlarmSet, EnergyMetrics
@@ -269,7 +270,7 @@ class tgraphcanvas(QObject):
         'decay_weights', 'temp_decay_weights', 'flavorlabels', 'flavors', 'flavors_total_correction', 'flavorstartangle', 'flavoraspect', 'flavorchart_plotf', 'flavorchart_angles', 'flavorchart_plot', 'flavorchart_background_plot',
         'flavorchart_fill', 'flavorchart_labels', 'flavorchart_total', 'mode', 'mode_tempsliders', 'errorlog', 'default_delay', 'delay', 'min_delay', 'extra_event_sampling_delay',
         'phases_fahrenheit_defaults', 'phases_celsius_defaults', 'phases', 'phasesbuttonflag', 'phasesfromBackgroundflag', 'watermarksflag', 'step100temp', 'phasesLCDflag',
-        'phasesLCDmode', 'phasesLCDmode_l', 'phasesLCDmode_all', 'statisticsflags', 'statisticsmode', 'AUCbegin', 'AUCbase', 'AUCbaseFlag', 'AUCtarget', 'AUCbackground',
+        'phasesLCDmode', 'phasesLCDmode_l', 'phasesLCDmode_all', 'roastLevelFlag', 'roastLevelLimits', 'roastLevelETweight', 'roastLevelXchannel', 'roastLevelXweight', 'roastLevelOffset', 'statisticsflags', 'statisticsmode', 'AUCbegin', 'AUCbase', 'AUCbaseFlag', 'AUCtarget', 'AUCbackground',
         'AUCtargetFlag', 'AUCguideFlag', 'AUClcdFlag', 'AUCLCDmode', 'AUCvalue', 'AUCsinceFCs', 'AUCguideTime', 'AUCshowFlag', 'statisticstimes', 'device', 'device_logging',
         'device_log_file_name', 'device_log_file', 'phidget_dataRatesStrings', 'phidget_dataRatesValues', 'phidget1048_types', 'phidget1048_async', 'phidget1048_changeTriggers',
         'phidget1048_changeTriggersValues', 'phidget1048_changeTriggersStrings', 'phidget1048_dataRate', 'phidget1045_async', 'phidget1045_changeTrigger', 'phidget1045_changeTriggersValues',
@@ -641,6 +642,14 @@ class tgraphcanvas(QObject):
         self.phasesLCDmode:int = 1 # one of 0: time, 1: percentage, 2: temp mode
         self.phasesLCDmode_l:list[int] = [1,1,1] # stores last phases LCD mode per roast phase (Drying, Mailard, Finishing)
         self.phasesLCDmode_all:list[bool] = [False,False,True]
+
+        #show roast level indicator (Half City,..,Full City) next to the phases LCDs during roasts
+        self.roastLevelFlag:bool = False
+        self.roastLevelLimits:list[int] = list(ROAST_LEVEL_LIMITS_F_DEFAULT) # start temps of the roast levels followed by the end of the last one
+        self.roastLevelETweight:float = 0. # share of ET in the bean temperature estimate, 0: BT only, 1: ET only
+        self.roastLevelXchannel:int = -1 # extra channel X blended into the estimate, like an exhaust probe; 2*i for extratemp1[i], 2*i+1 for extratemp2[i], -1 for none
+        self.roastLevelXweight:float = 0. # share of the extra channel X in the bean temperature estimate
+        self.roastLevelOffset:float = 0. # added to the bean temperature estimate to correct for the probe
 
 
         #statistics flags selects to display:
@@ -5619,6 +5628,10 @@ class tgraphcanvas(QObject):
                         if self.AUClcdFlag:
                             self.aw.updateAUCLCD()
 
+                        #update roast level indicator
+                        if self.roastLevelFlag:
+                            self.aw.updateRoastLevel()
+
             except Exception as e: # pylint: disable=broad-except
                 _log.exception(e)
                 _, _, exc_tb = sys.exc_info()
@@ -8100,6 +8113,8 @@ class tgraphcanvas(QObject):
         self.aw.updatePhasesLCDs()
         #clear AUC LCD
         self.aw.updateAUCLCD()
+        #clear roast level indicator
+        self.aw.updateRoastLevel()
 
         # if background is loaded we move it back to its original position (after regular load):
         if self.backgroundprofile is not None:
@@ -12125,6 +12140,8 @@ class tgraphcanvas(QObject):
             #change watermarks limits. dryphase1, dryphase2, midphase, and finish phase Y limits
             for i in range(4):
                 self.phases[i] = int(round(fromCtoFstrict(self.phases[i])))
+            self.roastLevelLimits = [int(round(fromCtoFstrict(t))) for t in self.roastLevelLimits]
+            self.roastLevelOffset = float2float(self.roastLevelOffset * 1.8)
             if self.step100temp is not None:
                 self.step100temp = int(round(fromCtoFstrict(self.step100temp)))
             self.AUCbase = int(round(fromCtoFstrict(self.AUCbase)))
@@ -12159,6 +12176,8 @@ class tgraphcanvas(QObject):
             #change watermarks limits. dryphase1, dryphase2, midphase, and finish phase Y limits
             for i in range(4):
                 self.phases[i] = int(round(fromFtoCstrict(self.phases[i])))
+            self.roastLevelLimits = [int(round(fromFtoCstrict(t))) for t in self.roastLevelLimits]
+            self.roastLevelOffset = float2float(self.roastLevelOffset / 1.8)
             if self.step100temp is not None:
                 self.step100temp = int(round(fromFtoCstrict(self.step100temp)))
             self.AUCbase = int(round(fromFtoCstrict(self.AUCbase)))
@@ -14021,6 +14040,8 @@ class tgraphcanvas(QObject):
                 self.aw.DRY2FCslabel.setStyleSheet("background-color:'transparent'; color: " + self.palette['messages'][:7] + ';')
             if self.AUClcdFlag:
                 self.aw.AUCLCD.show()
+            if self.roastLevelFlag:
+                self.aw.roastLevelFrame.show()
 
             self.phasesLCDmode = self.phasesLCDmode_l[0]
 
@@ -14105,6 +14126,7 @@ class tgraphcanvas(QObject):
             self.aw.messagelabel.setVisible(True)
             self.aw.phasesLCDs.hide()
             self.aw.AUCLCD.hide()
+            self.aw.roastLevelFrame.hide()
             self.aw.hideEventsMinieditor()
 
             # enable "green flag" menu:
