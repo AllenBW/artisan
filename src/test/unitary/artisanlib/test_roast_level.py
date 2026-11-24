@@ -10,22 +10,29 @@ import math
 import pytest
 
 from artisanlib.roast_level import (ROAST_LEVELS, ROAST_LEVEL_LIMITS_F_DEFAULT, ROAST_LEVEL_LIMITS_C_DEFAULT,
-    ROAST_LEVEL_COLORS, ROAST_LEVEL_ETA_WINDOW, estimate_bean_temp, max_estimated_temp, next_limit, roast_level, seconds_to_temp)
+    ROAST_LEVEL_LIMITS_F_CHART, ROAST_LEVEL_LIMITS_C_CHART, ROAST_LEVEL_COLORS, ROAST_LEVEL_ETA_WINDOW, ROAST_LEVEL_ETA_WINDOW_MAX,
+    estimate_bean_temp, max_estimated_temp, next_limit, rise_start, roast_level, seconds_to_temp)
 
 
 class TestDefaults:
     def test_limits_match_levels(self) -> None:
-        assert len(ROAST_LEVEL_LIMITS_F_DEFAULT) == len(ROAST_LEVELS) + 1
-        assert len(ROAST_LEVEL_LIMITS_C_DEFAULT) == len(ROAST_LEVELS) + 1
+        for limits in (ROAST_LEVEL_LIMITS_F_DEFAULT, ROAST_LEVEL_LIMITS_C_DEFAULT, ROAST_LEVEL_LIMITS_F_CHART, ROAST_LEVEL_LIMITS_C_CHART):
+            assert len(limits) == len(ROAST_LEVELS) + 1
+            assert list(limits) == sorted(set(limits))
         assert len(ROAST_LEVEL_COLORS) == len(ROAST_LEVELS) + 1
 
-    def test_limits_ascending(self) -> None:
-        assert list(ROAST_LEVEL_LIMITS_F_DEFAULT) == sorted(ROAST_LEVEL_LIMITS_F_DEFAULT)
-        assert list(ROAST_LEVEL_LIMITS_C_DEFAULT) == sorted(ROAST_LEVEL_LIMITS_C_DEFAULT)
+    # switching the temperature mode converts and rounds the limits: the defaults of both modes are the same ones
+    def test_celsius_and_fahrenheit_agree(self) -> None:
+        for fahrenheit, celsius in ((ROAST_LEVEL_LIMITS_F_DEFAULT, ROAST_LEVEL_LIMITS_C_DEFAULT), (ROAST_LEVEL_LIMITS_F_CHART, ROAST_LEVEL_LIMITS_C_CHART)):
+            for f, c in zip(fahrenheit, celsius, strict=True):
+                assert round((f - 32) * 5 / 9) == c
+                assert round(c * 9 / 5 + 32) == f or fahrenheit is ROAST_LEVEL_LIMITS_F_CHART
 
-    def test_celsius_defaults_match_fahrenheit(self) -> None:
-        for f, c in zip(ROAST_LEVEL_LIMITS_F_DEFAULT, ROAST_LEVEL_LIMITS_C_DEFAULT, strict=True):
-            assert round((f - 32) * 5 / 9) == c
+    # the defaults are the chart limits placed between the first and second crack this fork's roaster reads
+    # (188.5C and 212C) in proportion to where the chart has them (205C and 234.4C)
+    def test_defaults_follow_the_chart_between_the_cracks(self) -> None:
+        for chart, default in zip(ROAST_LEVEL_LIMITS_C_CHART, ROAST_LEVEL_LIMITS_C_DEFAULT, strict=True):
+            assert default == pytest.approx(188.5 + (chart - 205) / (234.4 - 205) * (212 - 188.5), abs=0.75)
 
 
 class TestEstimateBeanTemp:
@@ -83,7 +90,7 @@ class TestMaxEstimatedTemp:
 
 
 class TestRoastLevel:
-    limits = ROAST_LEVEL_LIMITS_F_DEFAULT # 415, 426, 435, 446, 454
+    limits = ROAST_LEVEL_LIMITS_F_CHART # 415, 426, 435, 446, 454
 
     def test_below_first_level(self) -> None:
         assert roast_level(None, self.limits) is None
@@ -112,7 +119,7 @@ class TestRoastLevel:
         (234, 'beyond'),
     ])
     def test_celsius_levels(self, temp:float, expected:str|None) -> None:
-        level = roast_level(temp, ROAST_LEVEL_LIMITS_C_DEFAULT)
+        level = roast_level(temp, ROAST_LEVEL_LIMITS_C_CHART)
         if expected is None:
             assert level is None
         elif expected == 'beyond':
@@ -128,8 +135,37 @@ class TestRoastLevel:
         assert roast_level(430, [415, 426]) is None
 
 
+class TestRiseStart:
+    def test_lowest_reading_after_charge(self) -> None:
+        #     preheat    charge              lowest       rising
+        bt = [200., 201., 224., 180., 120., 86., 86., 90., 120., 190.]
+        assert rise_start(bt, 2, len(bt)) == 6 # the last of the lowest readings
+
+    def test_charge_marked_during_preheat(self) -> None:
+        # CHARGE detected long before the beans went in: the high readings up to the real charge do not count
+        bt = [200., 202., 205., 207., 150., 90., 84., 95., 150.]
+        start = rise_start(bt, 0, len(bt))
+        assert start == 6
+        assert max_estimated_temp(bt, bt, start, len(bt), 0, 0) == 150
+
+    def test_still_falling(self) -> None:
+        assert rise_start([224., 180., 120.], 0, 3) == 2
+
+    def test_missing_readings_skipped(self) -> None:
+        assert rise_start([224., -1., 120., math.nan, 130.], 0, 5) == 2
+
+    def test_end_excluded(self) -> None:
+        assert rise_start([224., 180., 120., 80.], 0, 3) == 2
+
+    def test_nothing_to_go_by(self) -> None:
+        assert rise_start([224., 180.], -1, 2) is None
+        assert rise_start([224., 180.], 5, 9) is None
+        assert rise_start([-1., -1.], 0, 2) is None
+        assert rise_start([], 0, 0) is None
+
+
 class TestNextLimit:
-    limits = ROAST_LEVEL_LIMITS_C_DEFAULT # 213, 219, 224, 230, 234
+    limits = ROAST_LEVEL_LIMITS_C_CHART # 213, 219, 224, 230, 234
 
     def test_next_limit(self) -> None:
         assert next_limit(None, self.limits) is None
@@ -183,8 +219,25 @@ class TestSecondsToTemp:
         # a fast start, then flat for longer than the window: nothing to count down
         timex = [2. * i for i in range(90)]
         bt = [150. + i for i in range(45)] + [195.] * 45
-        assert ROAST_LEVEL_ETA_WINDOW < 2 * 45
+        assert ROAST_LEVEL_ETA_WINDOW_MAX <= 2 * 45
         assert seconds_to_temp(207, timex, bt, bt, 0, len(bt), 0, 0) is None
+
+    def test_slow_rise_in_whole_degrees(self) -> None:
+        # 2 degrees per minute steps only every 30 s: the first window holds one step at most, the widened one three
+        timex, bt, et = self.roast(203.9, 2, samples=120, whole_degrees=True)
+        secs = seconds_to_temp(207, timex, bt, et, 0, len(bt), 0, 0)
+        assert secs is not None
+        assert secs == pytest.approx(93, abs=25)
+        # which the window as it is, not widened, gets badly wrong
+        narrow = seconds_to_temp(207, timex, bt, et, 0, len(bt), 0, 0, window_max=ROAST_LEVEL_ETA_WINDOW)
+        assert narrow is None or abs(narrow - 93) > 25
+
+    def test_recent_change_of_rate_counts(self) -> None:
+        # 3 degrees per minute for long, then 12 for the last 30 s: the countdown follows the last window, not the minutes before
+        timex = [2. * i for i in range(120)]
+        bt = [150. + 3 / 60 * t for t in timex[:105]]
+        bt += [bt[-1] + 12 / 60 * (t - timex[104]) for t in timex[105:]]
+        assert seconds_to_temp(bt[-1] + 4, timex, bt, bt, 0, len(bt), 0, 0) == pytest.approx(20, abs=3)
 
     def test_falling_or_slow(self) -> None:
         timex, bt, et = self.roast(204, -3)

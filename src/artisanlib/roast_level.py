@@ -36,14 +36,22 @@
 # ET and X measure air, not beans, and read well above the beans late in a roast, which is
 # why their weights are best kept small. The defaults (all weights 0, offset 0) use BT as read.
 #
-# A roast does not get lighter again, so the level is that of the highest estimate since TP,
-# rather than the current one. This also keeps the indicator from flickering near a limit
-# and ignores the high BT readings before TP left by a preheated probe.
+# A roast does not get lighter again, so the level is that of the highest estimate since the
+# lowest BT after CHARGE, rather than the current one. This also keeps the indicator from
+# flickering near a limit and ignores the high BT readings a preheated probe leaves before the
+# beans cool it down. The lowest BT is used rather than Artisan's TP, as a TP placed too early
+# (after a CHARGE detected during preheat) would hold on to a level the beans never reached.
 #
-# The countdown to the next level extends a straight line fitted to the estimates of the last
-# ROAST_LEVEL_ETA_WINDOW seconds up to the next limit. The fit, rather than the last reading and
-# its rate of rise, is what makes this work with probes reporting whole degrees only, where the
-# last reading is up to a degree behind and the rate between two readings is either 0 or huge.
+# The countdown to the next level extends a straight line fitted to the latest estimates up to
+# the next limit. The fit, rather than the last reading and its rate of rise, is what makes this
+# work with probes reporting whole degrees only, where the last reading is up to a degree behind
+# and the rate between two readings is either 0 or huge. The line is fitted to the last
+# ROAST_LEVEL_ETA_WINDOW seconds, a window widened up to ROAST_LEVEL_ETA_WINDOW_MAX until the
+# estimates in it rose by ROAST_LEVEL_ETA_MIN_RISE degrees, so that a slow rise in whole degrees
+# still gives a line. Measured on 154 roasts of a Coffee-Tech FZ94 (whole degrees, a reading every
+# 2 s, 413 limits reached): 30 s ahead the countdown was off by 5 s in the median and by more than
+# 15 s one time in ten, 60 s ahead by 11 s and 32 s; a window of 60 s was off by a third more. No
+# line through the past knows of the heat or air changed a moment ago.
 
 from collections.abc import Sequence
 from typing import Final, TYPE_CHECKING
@@ -56,21 +64,35 @@ if TYPE_CHECKING:
 # level names in order, each starting at the corresponding entry of the limits below
 ROAST_LEVELS: Final[tuple[str, ...]] = ('Half City', 'City', 'City+', 'Full City')
 
-# start temperatures of the ROAST_LEVELS, followed by the end of the last level, in the
-# temperature mode the limits are kept in. City (426F), City+ (435F), Full City (446F) and its
-# end at Full City+ (454F) are the bean temperatures of Sweet Maria's pictorial guide to the
-# roast process; Half City is not on that chart and starts here at its "first crack under way"
-# (415F). The same guide has first crack begin at 401F: a probe reading first crack at another
-# temperature needs that difference as offset (or the limits moved by it)
-ROAST_LEVEL_LIMITS_F_DEFAULT: Final[tuple[int, ...]] = (415, 426, 435, 446, 454)
-ROAST_LEVEL_LIMITS_C_DEFAULT: Final[tuple[int, ...]] = (213, 219, 224, 230, 234)
+# start temperatures of the ROAST_LEVELS, followed by the end of the last level, as bean
+# temperatures: City (426F), City+ (435F), Full City (446F) and its end at Full City+ (454F,
+# the first snaps of second crack) are those of Sweet Maria's pictorial guide to the roast
+# process; Half City is not on that chart and starts here at its "first crack under way" (415F).
+# The same guide has first crack begin at 401F
+ROAST_LEVEL_LIMITS_F_CHART: Final[tuple[int, ...]] = (415, 426, 435, 446, 454)
+ROAST_LEVEL_LIMITS_C_CHART: Final[tuple[int, ...]] = (213, 219, 224, 230, 234)
 
-# the countdown to the next level is taken from the estimates of the last this many seconds
-ROAST_LEVEL_ETA_WINDOW: Final[float] = 60.
+# the limits as this fork's roaster reads them, a Coffee-Tech FZ94 whose bean probe is well behind
+# the beans: over its logged roasts first crack was marked at a median BT of 188.5C (126 roasts)
+# and second crack at 212C (29 roasts), where the chart has 205C and 234.4C. The chart limits are
+# placed between those two marks in proportion, as one offset cannot fit both: the 17C that fit
+# first crack would have second crack begin while City+ is still shown.
+# These are the defaults, in the temperature mode the limits are kept in
+ROAST_LEVEL_LIMITS_C_DEFAULT: Final[tuple[int, ...]] = (195, 200, 204, 209, 212)
+ROAST_LEVEL_LIMITS_F_DEFAULT: Final[tuple[int, ...]] = (383, 392, 399, 408, 414)
+
+# the countdown to the next level is taken from the estimates of the last this many seconds,
+ROAST_LEVEL_ETA_WINDOW: Final[float] = 30.
+# widened in steps of 10 s up to this many, until the estimates in the window rose by at least
+ROAST_LEVEL_ETA_WINDOW_MAX: Final[float] = 90.
+# this many degrees
+ROAST_LEVEL_ETA_MIN_RISE: Final[float] = 3.
 # no countdown below this rate of rise of the estimate, in degrees per minute
 ROAST_LEVEL_ETA_MIN_RATE: Final[float] = 0.5
-# from this many seconds on the countdown is highlighted
+# from this many seconds on the countdown is highlighted, and with a target level set, an alert given
 ROAST_LEVEL_ETA_WARN: Final[float] = 30.
+# a countdown of more than this many seconds is not shown: too far off to be told, or to matter
+ROAST_LEVEL_ETA_SHOWN: Final[float] = 300.
 
 # background colors of the ROAST_LEVELS, followed by the one for beyond the last level
 ROAST_LEVEL_COLORS: Final[tuple[str, ...]] = ('#b5835a', '#9a6a43', '#83552f', '#6b4123', '#4a2a14')
@@ -116,17 +138,22 @@ def max_estimated_temp(bt:Sequence[float], et:Sequence[float], start:int, end:in
 
 def seconds_to_temp(target:float, timex:Sequence[float], bt:Sequence[float], et:Sequence[float], start:int, end:int,
         et_weight:float, offset:float, xt:Sequence[float]|None = None, xt_weight:float = 0.,
-        window:float = ROAST_LEVEL_ETA_WINDOW) -> float|None:
+        window:float = ROAST_LEVEL_ETA_WINDOW, window_max:float = ROAST_LEVEL_ETA_WINDOW_MAX) -> float|None:
     """Returns the seconds until the bean temperature estimate reaches target, 0 if it is there by now,
-    or None if this cannot be told: too few readings in the last window seconds before the last one
-    (from index start up to, but excluding, end), or an estimate that rises too slowly or falls."""
+    or None if this cannot be told: too few readings before the last one (from index start up to, but
+    excluding, end), or an estimate that rises too slowly or falls. The readings of the last window
+    seconds count, of up to window_max seconds while they rose by less than ROAST_LEVEL_ETA_MIN_RISE."""
     end = min(end, len(timex))
     estimates, valid = _estimates(bt, et, start, end, et_weight, offset, xt, xt_weight)
     if not valid.any():
         return None
     times = numpy.array(timex[start:start+len(estimates)], dtype=numpy.double)
     now = times[-1]
-    recent = valid & (times >= now - window)
+    while True:
+        recent = valid & (times >= now - window)
+        if window >= window_max or (recent.any() and numpy.ptp(estimates[recent]) >= ROAST_LEVEL_ETA_MIN_RISE):
+            break
+        window = min(window + 10, window_max)
     # a line through readings covering less than a third of the window says little about the trend
     if numpy.count_nonzero(recent) < 4 or times[recent][-1] - times[recent][0] < window / 3:
         return None
@@ -134,6 +161,19 @@ def seconds_to_temp(target:float, timex:Sequence[float], bt:Sequence[float], et:
     if slope * 60 < ROAST_LEVEL_ETA_MIN_RATE:
         return None
     return max(0., float((target - current) / slope))
+
+
+def rise_start(bt:Sequence[float], charge:int, end:int) -> int|None:
+    """Returns the index of the lowest valid BT reading from index charge up to, but excluding, end,
+    the last of them if there are several, or None if there is none: from there on the beans rise."""
+    end = min(end, len(bt))
+    if charge < 0 or charge >= end:
+        return None
+    values = numpy.array(bt[charge:end], dtype=numpy.double)
+    values[(values == -1) | numpy.isnan(values)] = numpy.inf
+    if not numpy.isfinite(values).any():
+        return None
+    return charge + len(values) - 1 - int(numpy.argmin(values[::-1]))
 
 
 def next_limit(temp:float|None, limits:Sequence[float]) -> int|None:

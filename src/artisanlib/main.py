@@ -675,8 +675,8 @@ from artisanlib.widgets import (MyQLCDNumber, EventPushButton, MajorEventPushBut
 
 from artisanlib.notifications import Notification, NotificationManager, NotificationType
 from artisanlib.canvas import tgraphcanvas
-from artisanlib.roast_level import (ROAST_LEVELS, ROAST_LEVEL_COLORS, ROAST_LEVEL_ETA_WARN, max_estimated_temp, seconds_to_temp,
-    next_limit, roast_level)
+from artisanlib.roast_level import (ROAST_LEVELS, ROAST_LEVEL_COLORS, ROAST_LEVEL_ETA_WARN, ROAST_LEVEL_ETA_SHOWN, max_estimated_temp,
+    seconds_to_temp, next_limit, rise_start, roast_level)
 from artisanlib.phases_canvas import tphasescanvas
 from artisanlib.scale import ScaleManager
 
@@ -1333,6 +1333,19 @@ class InvalidProfileHash(Exception):
 # NOTE: to have pylint to verify proper __slot__ definitions with pylint one has to remove the super class QMainWindow here temporarily
 #   as this class does not has __slot__ definitions and thus __dict__ is contained which suppresses the warnings
 #class ApplicationWindow():
+# the sound of a roast level alert: two short tones ahead of the target level, three higher and longer ones once it is
+# reached. Blocks while it plays: run in a thread
+def roastLevelSound(reached:bool) -> None:
+    if sys.platform == 'win32':
+        try:
+            import winsound
+            for _ in range(3 if reached else 2):
+                winsound.Beep(1320 if reached else 880, 300 if reached else 160)
+                libtime.sleep(0.09)
+        except Exception as e: # pylint: disable=broad-except
+            _log.info('roast level sound: %s', e)
+
+
 class ApplicationWindow(QMainWindow):
 
     NUMBER_OF_EXTRABUTTON_ROWS:Final[int] = 10 # max number of extra button rows
@@ -1447,7 +1460,8 @@ class ApplicationWindow(QMainWindow):
         'keyboardmoveflag', 'lastkeyboardcmd', 'error_dlg', 'serial_dlg', 'message_dlg', 'ETname', 'BTname', 'level1frame', 'level1layout', 'qpc', 'splitter', 'scroller', 'EventsGroupLayout',
         'LCD2frame', 'LCD3frame', 'LCD4frame', 'LCD5frame', 'LCD6frame', 'LCD7frame', 'TPlabel', 'TPlcd', 'TPlcdFrame', 'TP2DRYlabel', 'TP2DRYframe',
         'DRYlabel', 'DRYlcd', 'DRYlcdFrame', 'DRY2FCslabel', 'DRY2FCsframe', 'FCslabel', 'FCslcd', 'FCslcdFrame', 'AUClabel', 'AUClcd', 'AUClcdFrame',
-        'AUCLCD', 'roastLevelLabel', 'roastLevelValue', 'roastLevelFrame', 'phasesLCDs', 'extrabuttonsLayout', 'extrabuttondialogs', 'slider1', 'slider2', 'slider3', 'slider4', 'sliderLCD1', 'sliderLCD2', 'sliderLCD3',
+        'AUCLCD', 'roastLevelLabel', 'roastLevelValue', 'roastLevelFrame', 'roastLevelAlerted', 'roastLevelFlashUntil', 'roastLevelFlashTimer',
+        'roastLevelFlashOn', 'roastLevelShown', 'phasesLCDs', 'extrabuttonsLayout', 'extrabuttondialogs', 'slider1', 'slider2', 'slider3', 'slider4', 'sliderLCD1', 'sliderLCD2', 'sliderLCD3',
         'sliderLCD4', 'sliderGrpBox1', 'sliderGrpBox2', 'sliderGrpBox3', 'sliderGrpBox4', 'sliderSV', 'sliderLCDSV', 'sliderGrpBoxSV', 'leftlayout',
         'sliderFrame', 'sliderDock', 'lcdFrame', 'midlayout', 'editgraphdialog', 'artisanviewerFirstStart',
         'buttonpalette', 'extraeventbuttontextcolor', 'extraeventsactions', 'extraeventsdescriptions', 'extraeventstypes', 'extraeventsvalues',
@@ -3499,6 +3513,13 @@ class ApplicationWindow(QMainWindow):
         self.roastLevelFrame.setContentsMargins(0, 0, 0, 0)
         self.roastLevelFrame.setLayout(roastLevelLayout)
         self.roastLevelFrame.hide()
+        # the alerts given for the target level in this roast, as (kind, target), and the flashing that goes with them
+        self.roastLevelAlerted:set[tuple[str,int]] = set()
+        self.roastLevelFlashUntil:float = 0. # in the time of libtime.monotonic()
+        self.roastLevelFlashOn:bool = False
+        self.roastLevelShown:int|None = None # the level on the badge
+        self.roastLevelFlashTimer:QTimer = QTimer(self)
+        self.roastLevelFlashTimer.timeout.connect(self.roastLevelFlash)
 
 
         self.phasesLCDs = QFrame()
@@ -7589,40 +7610,129 @@ class ApplicationWindow(QMainWindow):
             return QApplication.translate('Label', ROAST_LEVELS[i])
         return QApplication.translate('Label', 'Past {0}').format(QApplication.translate('Label', ROAST_LEVELS[-1]))
 
-    # returns the roast level reached so far (index into ROAST_LEVELS, len(ROAST_LEVELS) beyond the last, None below
-    # the first), the highest bean temperature estimate since TP up to DROP it is taken from, the index into the roast
-    # level limits of the limit reached next and the seconds until then at the current rate of rise (None if unknown,
-    # and always after DROP)
-    def roastLevelStatus(self) -> tuple[int|None, float|None, int|None, float|None]:
+    # the readings the roast level is taken from: the first and the last index (excluded), the readings of the extra
+    # channel if one is blended in, and whether the beans are out; None while the level cannot be told.
+    # The estimates count from the lowest BT after CHARGE up to DROP, and only once the TP is known or overdue, as
+    # until then the lowest BT is just the latest reading of a probe still cooling down from preheat
+    def roastLevelReadings(self) -> tuple[int, int, list[float]|None, bool]|None:
         qmc = self.qmc
         if qmc.timeindex[0] < 0 or not qmc.TPalarmtimeindex:
-            return None, None, None, None
+            return None
         dropped = qmc.timeindex[6] > 0
         end = (qmc.timeindex[6] + 1) if dropped else len(qmc.temp2)
+        start = rise_start(qmc.temp2, qmc.timeindex[0], end)
+        if start is None:
+            return None
         xt:list[float]|None = None
         x = qmc.roastLevelXchannel
         if 0 <= x < 2*len(qmc.extradevices):
             xt = (qmc.extratemp1 if x % 2 == 0 else qmc.extratemp2)[x // 2]
-        temp = max_estimated_temp(qmc.temp2, qmc.temp1, qmc.TPalarmtimeindex, end,
+        return start, end, xt, dropped
+
+    # the seconds until the limit of the given index into the roast level limits is reached at the current rate of rise,
+    # 0 if it is by now; None if unknown, and always after DROP
+    def roastLevelSeconds(self, i:int) -> float|None:
+        qmc = self.qmc
+        readings = self.roastLevelReadings()
+        if readings is None or readings[3] or not 0 <= i < len(qmc.roastLevelLimits):
+            return None
+        start, end, xt, _ = readings
+        return seconds_to_temp(qmc.roastLevelLimits[i], qmc.timex, qmc.temp2, qmc.temp1, start, end,
+            qmc.roastLevelETweight, qmc.roastLevelOffset, xt, qmc.roastLevelXweight)
+
+    # returns the roast level reached so far (index into ROAST_LEVELS, len(ROAST_LEVELS) beyond the last, None below
+    # the first), the highest bean temperature estimate it is taken from, the index into the roast level limits of the
+    # limit reached next and the seconds until then (see roastLevelSeconds)
+    def roastLevelStatus(self) -> tuple[int|None, float|None, int|None, float|None]:
+        qmc = self.qmc
+        readings = self.roastLevelReadings()
+        if readings is None:
+            return None, None, None, None
+        start, end, xt, _ = readings
+        temp = max_estimated_temp(qmc.temp2, qmc.temp1, start, end,
             qmc.roastLevelETweight, qmc.roastLevelOffset, xt, qmc.roastLevelXweight)
         nxt = next_limit(temp, qmc.roastLevelLimits)
-        secs:float|None = None
-        if nxt is not None and not dropped:
-            secs = seconds_to_temp(qmc.roastLevelLimits[nxt], qmc.timex, qmc.temp2, qmc.temp1, qmc.TPalarmtimeindex, end,
-                qmc.roastLevelETweight, qmc.roastLevelOffset, xt, qmc.roastLevelXweight)
-        return roast_level(temp, qmc.roastLevelLimits), temp, nxt, secs
+        return roast_level(temp, qmc.roastLevelLimits), temp, nxt, (self.roastLevelSeconds(nxt) if nxt is not None else None)
 
-    # shows the roast level reached so far, and above it the countdown to the next one
+    # the roast level to drop at, as index into ROAST_LEVELS; None if none is set
+    def roastLevelTargetIndex(self) -> int|None:
+        target = self.qmc.roastLevelTarget
+        return target if 0 <= target < len(ROAST_LEVELS) else None
+
+    # shows the roast level indicator while recording, if wanted and only while the top row has the room for it:
+    # it must never push the buttons right of it off a narrow screen (the touch panel's guide names the level too)
+    def showRoastLevel(self) -> None:
+        show = self.qmc.flagstart and self.qmc.roastLevelFlag
+        if show:
+            need = self.level1frame.minimumSizeHint().width()
+            if self.roastLevelFrame.isHidden():
+                need += self.roastLevelFrame.sizeHint().width()
+            show = need <= self.level1frame.width()
+        if show == self.roastLevelFrame.isHidden():
+            self.roastLevelFrame.setVisible(show)
+
+    def styleRoastLevelBadge(self) -> None:
+        if self.roastLevelFlashOn:
+            style = 'QLabel { color: white; background-color: #d9822b; border-radius: 4px; padding: 0px 6px; }'
+        elif self.roastLevelShown is None:
+            style = 'QLabel { color: ' + self.qmc.palette['messages'][:7] + '; }'
+        else:
+            style = f'QLabel {{ color: white; background-color: {ROAST_LEVEL_COLORS[self.roastLevelShown]}; border-radius: 4px; padding: 0px 6px; }}'
+        if self.roastLevelValue.styleSheet() != style:
+            self.roastLevelValue.setStyleSheet(style)
+
+    # the badge blinks for some seconds after an alert (the touch panel's guide does too, see RoastAssist.refresh())
+    @pyqtSlot()
+    def roastLevelFlash(self) -> None:
+        if libtime.monotonic() < self.roastLevelFlashUntil:
+            self.roastLevelFlashOn = not self.roastLevelFlashOn
+        else:
+            self.roastLevelFlashOn = False
+            self.roastLevelFlashTimer.stop()
+        self.styleRoastLevelBadge()
+
+    # an alert for the target level, given once per roast and target: a message, a blinking badge and guide, and a sound
+    def roastLevelAlert(self, kind:str, target:int, message:str) -> None:
+        if (kind, target) in self.roastLevelAlerted:
+            return
+        self.roastLevelAlerted.add((kind, target))
+        reached = kind == 'reached'
+        if reached:
+            self.roastLevelAlerted.add(('soon', target)) # nothing to get ready for anymore
+        self.sendmessage(message)
+        self.roastLevelFlashUntil = libtime.monotonic() + (10 if reached else 6)
+        self.roastLevelFlashTimer.start(350)
+        if self.qmc.roastLevelSound:
+            if sys.platform == 'win32':
+                threading.Thread(target=roastLevelSound, args=(reached,), daemon=True, name='roast-level-sound').start()
+            else:
+                QApplication.beep()
+
+    # with a target level set: get ready ROAST_LEVEL_ETA_WARN seconds ahead of it, and drop once it is reached
+    def roastLevelAlerts(self, level:int|None, target:int|None, secs:float|None) -> None:
+        if self.qmc.timeindex[0] < 0: # no roast yet, or a new one
+            self.roastLevelAlerted.clear()
+        elif target is not None and self.qmc.timeindex[6] <= 0:
+            name = self.roastLevelName(target)
+            if level is not None and level >= target:
+                self.roastLevelAlert('reached', target, QApplication.translate('Message', '{0} reached: drop').format(name))
+            elif secs is not None and secs <= ROAST_LEVEL_ETA_WARN:
+                self.roastLevelAlert('soon', target, QApplication.translate('Message', '{0} in about {1} s: get ready to drop').format(name, int(round(secs))))
+
+    # shows the roast level reached so far, and above it the countdown to the target level while that is still ahead,
+    # to the next level otherwise
     def updateRoastLevel(self) -> None:
         try:
+            self.showRoastLevel()
             level, temp, nxt, secs = self.roastLevelStatus()
-            if level is None:
-                self.roastLevelValue.setText('---')
-                self.roastLevelValue.setStyleSheet('QLabel { color: ' + self.qmc.palette['messages'][:7] + '; }')
-            else:
-                self.roastLevelValue.setText(f'<b>{self.roastLevelName(level)}</b>')
-                self.roastLevelValue.setStyleSheet(f'QLabel {{ color: white; background-color: {ROAST_LEVEL_COLORS[level]}; border-radius: 4px; padding: 0px 6px; }}')
-            if nxt is not None and secs is not None and secs < 3600:
+            target = self.roastLevelTargetIndex()
+            if target is not None and nxt is not None and (level is None or level < target):
+                nxt, secs = target, self.roastLevelSeconds(target)
+            self.roastLevelAlerts(level, target, secs if nxt == target else None)
+            self.roastLevelShown = level
+            self.roastLevelValue.setText('---' if level is None else f'<b>{self.roastLevelName(level)}</b>')
+            self.styleRoastLevelBadge()
+            if nxt is not None and secs is not None and secs <= ROAST_LEVEL_ETA_SHOWN:
                 # the end of the last level is not a level to name
                 name = self.roastLevelName(nxt) if nxt < len(ROAST_LEVELS) else QApplication.translate('Label', 'Past')
                 countdown = f'&raquo;{name} {stringfromseconds(secs, False)}'
@@ -7632,7 +7742,7 @@ class ApplicationWindow(QMainWindow):
             else:
                 self.roastLevelLabel.setText(self.label_fmt.format(QApplication.translate('Label', 'Roast Level')))
             if temp is not None:
-                self.roastLevelFrame.setToolTip(QApplication.translate('Tooltip', 'Roast level from the highest bean temperature estimate since TP: {0}{1}').format(
+                self.roastLevelFrame.setToolTip(QApplication.translate('Tooltip', 'Roast level from the highest bean temperature estimate of this roast: {0}{1}').format(
                     f'{temp:.1f}', self.qmc.mode))
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
@@ -18457,6 +18567,8 @@ class ApplicationWindow(QMainWindow):
             self.qmc.roastLevelXchannel = toInt(settings.value('roastLevelXchannel',self.qmc.roastLevelXchannel))
             self.qmc.roastLevelXweight = min(1. - self.qmc.roastLevelETweight, max(0., toFloat(settings.value('roastLevelXweight',self.qmc.roastLevelXweight))))
             self.qmc.roastLevelOffset = toFloat(settings.value('roastLevelOffset',self.qmc.roastLevelOffset))
+            self.qmc.roastLevelTarget = toInt(settings.value('roastLevelTarget',self.qmc.roastLevelTarget))
+            self.qmc.roastLevelSound = toBool(settings.value('roastLevelSound',self.qmc.roastLevelSound))
             self.qmc.AUCLCDmode = toInt(settings.value('AUCLCDmode',self.qmc.AUCLCDmode))
             self.qmc.AUCshowFlag = toBool(settings.value('AUCshowFlag',self.qmc.AUCshowFlag))
             self.keyboardmoveflag = toInt(settings.value('keyboardmoveflag',int(self.keyboardmoveflag)))
@@ -20450,6 +20562,8 @@ class ApplicationWindow(QMainWindow):
             self.settingsSetValue(settings, default_settings, 'roastLevelXchannel',self.qmc.roastLevelXchannel, read_defaults)
             self.settingsSetValue(settings, default_settings, 'roastLevelXweight',self.qmc.roastLevelXweight, read_defaults)
             self.settingsSetValue(settings, default_settings, 'roastLevelOffset',self.qmc.roastLevelOffset, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelTarget',self.qmc.roastLevelTarget, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'roastLevelSound',self.qmc.roastLevelSound, read_defaults)
             self.settingsSetValue(settings, default_settings, 'AUCLCDmode',self.qmc.AUCLCDmode, read_defaults)
             self.settingsSetValue(settings, default_settings, 'AUCshowFlag',self.qmc.AUCshowFlag, read_defaults)
             self.settingsSetValue(settings, default_settings, 'keyboardmoveflag',self.keyboardmoveflag, read_defaults)

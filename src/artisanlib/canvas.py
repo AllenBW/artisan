@@ -270,7 +270,7 @@ class tgraphcanvas(QObject):
         'decay_weights', 'temp_decay_weights', 'flavorlabels', 'flavors', 'flavors_total_correction', 'flavorstartangle', 'flavoraspect', 'flavorchart_plotf', 'flavorchart_angles', 'flavorchart_plot', 'flavorchart_background_plot',
         'flavorchart_fill', 'flavorchart_labels', 'flavorchart_total', 'mode', 'mode_tempsliders', 'errorlog', 'default_delay', 'delay', 'min_delay', 'extra_event_sampling_delay',
         'phases_fahrenheit_defaults', 'phases_celsius_defaults', 'phases', 'phasesbuttonflag', 'phasesfromBackgroundflag', 'watermarksflag', 'step100temp', 'phasesLCDflag',
-        'phasesLCDmode', 'phasesLCDmode_l', 'phasesLCDmode_all', 'roastLevelFlag', 'roastLevelLimits', 'roastLevelETweight', 'roastLevelXchannel', 'roastLevelXweight', 'roastLevelOffset', 'statisticsflags', 'statisticsmode', 'AUCbegin', 'AUCbase', 'AUCbaseFlag', 'AUCtarget', 'AUCbackground',
+        'phasesLCDmode', 'phasesLCDmode_l', 'phasesLCDmode_all', 'roastLevelFlag', 'roastLevelLimits', 'roastLevelETweight', 'roastLevelXchannel', 'roastLevelXweight', 'roastLevelOffset', 'roastLevelTarget', 'roastLevelSound', 'statisticsflags', 'statisticsmode', 'AUCbegin', 'AUCbase', 'AUCbaseFlag', 'AUCtarget', 'AUCbackground',
         'AUCtargetFlag', 'AUCguideFlag', 'AUClcdFlag', 'AUCLCDmode', 'AUCvalue', 'AUCsinceFCs', 'AUCguideTime', 'AUCshowFlag', 'statisticstimes', 'device', 'device_logging',
         'device_log_file_name', 'device_log_file', 'phidget_dataRatesStrings', 'phidget_dataRatesValues', 'phidget1048_types', 'phidget1048_async', 'phidget1048_changeTriggers',
         'phidget1048_changeTriggersValues', 'phidget1048_changeTriggersStrings', 'phidget1048_dataRate', 'phidget1045_async', 'phidget1045_changeTrigger', 'phidget1045_changeTriggersValues',
@@ -644,12 +644,14 @@ class tgraphcanvas(QObject):
         self.phasesLCDmode_all:list[bool] = [False,False,True]
 
         #show roast level indicator (Half City,..,Full City) next to the phases LCDs during roasts
-        self.roastLevelFlag:bool = False
+        self.roastLevelFlag:bool = True
         self.roastLevelLimits:list[int] = list(ROAST_LEVEL_LIMITS_F_DEFAULT) # start temps of the roast levels followed by the end of the last one
         self.roastLevelETweight:float = 0. # share of ET in the bean temperature estimate, 0: BT only, 1: ET only
         self.roastLevelXchannel:int = -1 # extra channel X blended into the estimate, like an exhaust probe; 2*i for extratemp1[i], 2*i+1 for extratemp2[i], -1 for none
         self.roastLevelXweight:float = 0. # share of the extra channel X in the bean temperature estimate
         self.roastLevelOffset:float = 0. # added to the bean temperature estimate to correct for the probe
+        self.roastLevelTarget:int = -1 # the roast level to drop at, as index into ROAST_LEVELS; -1: none
+        self.roastLevelSound:bool = True # alerts for the target level are also sounded
 
 
         #statistics flags selects to display:
@@ -14040,8 +14042,7 @@ class tgraphcanvas(QObject):
                 self.aw.DRY2FCslabel.setStyleSheet("background-color:'transparent'; color: " + self.palette['messages'][:7] + ';')
             if self.AUClcdFlag:
                 self.aw.AUCLCD.show()
-            if self.roastLevelFlag:
-                self.aw.roastLevelFrame.show()
+            self.aw.showRoastLevel()
 
             self.phasesLCDmode = self.phasesLCDmode_l[0]
 

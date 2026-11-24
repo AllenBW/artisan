@@ -226,6 +226,15 @@ class phasesGraphDlg(ArtisanDialog):
         self.roastLevelOffset.setRange(-100,100)
         self.roastLevelOffset.setSuffix(f' {self.aw.qmc.mode}')
         self.roastLevelOffset.setToolTip(QApplication.translate('Tooltip','Added to the bean temperature estimate to correct for a probe reading low (positive) or high (negative)'))
+        # the level to drop at
+        self.roastLevelTarget = QComboBox()
+        self.roastLevelTarget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.roastLevelTarget.addItem(QApplication.translate('ComboBox','None'), -1)
+        for i, name in enumerate(ROAST_LEVELS):
+            self.roastLevelTarget.addItem(QApplication.translate('Label', name), i)
+        self.roastLevelTarget.setToolTip(QApplication.translate('Tooltip','The roast level to drop at: the countdown runs to it, with an alert 30 s ahead of it and once it is reached'))
+        self.roastLevelSound = QCheckBox(QApplication.translate('CheckBox','Sound'))
+        self.roastLevelSound.setToolTip(QApplication.translate('Tooltip','Sound the alerts for the target roast level'))
         self.getRoastLevel()
 
         roastLevelLayout = QGridLayout()
@@ -249,9 +258,12 @@ class phasesGraphDlg(ArtisanDialog):
         roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', 'Offset')),3,3,Qt.AlignmentFlag.AlignRight)
         roastLevelLayout.addWidget(self.roastLevelOffset,3,4)
         roastLevelLayout.addWidget(self.roastLevelFlag,4,3,1,2,Qt.AlignmentFlag.AlignRight)
+        roastLevelLayout.addWidget(QLabel(QApplication.translate('Label', 'Drop at')),5,0,Qt.AlignmentFlag.AlignRight)
+        roastLevelLayout.addWidget(self.roastLevelTarget,5,1,1,2)
+        roastLevelLayout.addWidget(self.roastLevelSound,5,3,1,2,Qt.AlignmentFlag.AlignRight)
         roastLevelLayout.setColumnMinimumWidth(3,80)
         roastLevelGroup = QGroupBox(QApplication.translate('GroupBox','Roast Level'))
-        roastLevelGroup.setToolTip(QApplication.translate('Tooltip','Bean temperature estimate = BT share x BT + ET share x ET + extra channel share x extra channel + Offset\nBT takes the share ET and the extra channel leave.\nThe level shown is that of the highest estimate since TP'))
+        roastLevelGroup.setToolTip(QApplication.translate('Tooltip','Bean temperature estimate = BT share x BT + ET share x ET + extra channel share x extra channel + Offset\nBT takes the share ET and the extra channel leave.\nThe level shown is that of the highest estimate of the roast'))
         roastLevelGroup.setLayout(roastLevelLayout)
 
         boxedPhaseLayout = QHBoxLayout()
@@ -352,12 +364,7 @@ class phasesGraphDlg(ArtisanDialog):
     @pyqtSlot(int)
     def roastLevelFlagChanged(self, _:int) -> None:
         self.aw.qmc.roastLevelFlag = self.roastLevelFlag.isChecked()
-        if self.aw.qmc.flagstart:
-            if self.aw.qmc.roastLevelFlag:
-                self.aw.updateRoastLevel()
-                self.aw.roastLevelFrame.show()
-            else:
-                self.aw.roastLevelFrame.hide()
+        self.aw.updateRoastLevel()
 
     @pyqtSlot(int)
     def roastLevelXchannelChanged(self, _:int) -> None:
@@ -375,6 +382,8 @@ class phasesGraphDlg(ArtisanDialog):
         self.roastLevelXweight.setValue(int(round(self.aw.qmc.roastLevelXweight * 100)))
         self.roastLevelXchannelChanged(0)
         self.roastLevelOffset.setValue(self.aw.qmc.roastLevelOffset)
+        self.roastLevelTarget.setCurrentIndex(max(self.roastLevelTarget.findData(self.aw.qmc.roastLevelTarget), 0))
+        self.roastLevelSound.setChecked(bool(self.aw.qmc.roastLevelSound))
 
     def setRoastLevel(self) -> None:
         # keep the limits ascending
@@ -386,6 +395,8 @@ class phasesGraphDlg(ArtisanDialog):
         self.aw.qmc.roastLevelXchannel = self.roastLevelXchannel.currentData()
         self.aw.qmc.roastLevelXweight = self.roastLevelXweight.value() / 100
         self.aw.qmc.roastLevelOffset = self.roastLevelOffset.value()
+        self.aw.qmc.roastLevelTarget = self.roastLevelTarget.currentData()
+        self.aw.qmc.roastLevelSound = self.roastLevelSound.isChecked()
         if self.aw.qmc.flagstart and self.aw.qmc.roastLevelFlag:
             self.aw.updateRoastLevel()
 
@@ -460,8 +471,7 @@ class phasesGraphDlg(ArtisanDialog):
         self.aw.qmc.phasesLCDmode_l = list(self.org_phasesLCDmode_l)
         self.aw.qmc.phasesLCDmode_all = list(self.org_phasesLCDmode_all)
         self.aw.qmc.roastLevelFlag = bool(self.org_roastLevelFlag)
-        if self.aw.qmc.flagstart:
-            self.aw.roastLevelFrame.setVisible(self.aw.qmc.roastLevelFlag)
+        self.aw.showRoastLevel()
         self.aw.qmc.redraw(recomputeAllDeltas=False)
         self.savePhasesSettings()
         #save window position (only; not size!)
